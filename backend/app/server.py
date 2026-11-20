@@ -1278,7 +1278,7 @@ class Api(BaseHTTPRequestHandler):
                     traceable=bool(product["n"] and int(product["quantity"])==int(line["quantity"]) and not product["missing_layers"] and not product["missing_cost"] and line["cogs_cny"] is not None)
                     if package:
                         traceable=traceable and int(package["quantity"])==expected_package and not package["missing_layers"] and not package["missing_cost"]
-                    refunded=conn.execute("SELECT COALESCE(SUM(CAST(amount_cny AS REAL)),0) FROM sales_refunds WHERE sale_line_id=?",(line["id"],)).fetchone()[0]
+                    refunded=sum((Decimal(r["amount_cny"]) for r in conn.execute("SELECT amount_cny FROM sales_refunds WHERE sale_line_id=?",(line["id"],))),Decimal(0))
                     refundable=coffee_refund_only.remaining_revenue(conn,line)
                     result.append({**dict(line),"returned_quantity":returned["quantity"],
                         "returned_packaging_quantity":returned["packaging_quantity"],
