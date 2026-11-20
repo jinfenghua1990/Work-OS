@@ -13,6 +13,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+from coffee_source_identity import normalize_sale_source
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -2435,9 +2437,21 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"import_id":import_id,"duplicate":False,"lines":summary,"revenue":str(revenue),"cost_of_goods_sold":str(cogs),"gross_profit":str(revenue-cogs)})
 
     def import_sale_row(self, data: dict) -> None:
-        row_key = str(data.get("source_row_key", "")).strip()
-        if not row_key:
-            raise ValueError("source_row_key is required for row-level idempotency")
+        # Files are upload carriers, not business identities. A renamed or
+        # re-exported CSV must not post the same marketplace sale twice.
+        identity = normalize_sale_source(data)
+        raw_row_key = str(data.get("source_row_key", "")).strip()
+        row_key = str(identity["source_row_key"])
+        data = {**data, "source_row_key": row_key}
+        if identity["structured"]:
+            data.update({
+                "source": identity["source"],
+                "channel": identity["channel"],
+                "store_name": identity["store_name"],
+                "external_order_no": identity["external_order_no"],
+                "external_line_id": identity["external_line_id"],
+                "source_row_key_raw": raw_row_key,
+            })
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             prior = conn.execute("SELECT status,result FROM import_rows WHERE source_key=?", (row_key,)).fetchone()
@@ -2458,7 +2472,7 @@ class Api(BaseHTTPRequestHandler):
                 conn.execute("DELETE FROM import_rows WHERE source_key=?", (row_key,))
             conn.execute("SAVEPOINT import_row")
             try:
-                payload = {"source": data.get("source", "file_import"), "sold_on": data.get("sold_on", date.today().isoformat()), "sku": data["sku"], "quantity": data["quantity"], "unit_price": data["unit_price"], "channel": str(data.get("channel", "")).strip(), "business_line": data.get("business_line", "coffee"), "entity_code": data.get("entity_code", "main"), "project_code": data.get("project_code")}
+                payload = {"source": data.get("source", "file_import"), "sold_on": data.get("sold_on", date.today().isoformat()), "sku": data["sku"], "quantity": data["quantity"], "unit_price": data["unit_price"], "channel": str(data.get("channel", "")).strip(), "business_line": data.get("business_line", "coffee"), "entity_code": data.get("entity_code", "main"), "project_code": data.get("project_code"), "customer": data.get("customer", "未指定客户")}
                 result = self.post_sale(conn, payload, row_key)
                 conn.execute("INSERT INTO import_rows VALUES(?,?,?,?,?,?)", (str(uuid4()), row_key, json.dumps(data, ensure_ascii=False), "posted", json.dumps(result, ensure_ascii=False), now()))
                 conn.execute("RELEASE SAVEPOINT import_row")
@@ -2474,7 +2488,7 @@ class Api(BaseHTTPRequestHandler):
         day = str(data.get("sold_on", date.today().isoformat()))
         business_line = str(data.get("business_line", "coffee")).strip()
         entity_code = str(data.get("entity_code", "main")).strip()
-        project_code = str(data.get("project_code", "")).strip() or None
+        project_code = str(data.get("project_code") or "").strip() or None
         if business_line != "coffee" or not entity_code:
             raise ValueError("coffee sales require business_line=coffee and a legal entity code")
         ensure_open(conn, day)
