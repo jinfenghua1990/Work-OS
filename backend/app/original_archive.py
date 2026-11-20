@@ -104,6 +104,8 @@ def ingest(conn, stream, size: int, filename: str, category: str, period: str, s
         except FileExistsError:
             if dest.stat().st_size != size:
                 raise RuntimeError("archived file hash collision or corrupted archive")
+            # Matching file size is insufficient; reject silently modified bytes.
+            open_verified_file(hex_digest,key)
         stamp = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO archive_files (id,sha256,size_bytes,storage_key,created_at) "
