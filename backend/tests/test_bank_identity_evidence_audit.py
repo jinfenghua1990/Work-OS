@@ -134,6 +134,19 @@ class BankAndEvidenceRegression(unittest.TestCase):
         self.assertEqual(audit["corrupted_files"],1)
         self.assertEqual(audit["broken_business_links"],1)
 
+    def test_historic_bank_row_without_original_is_reported(self):
+        status,response=self.api.import_bank({
+            "rows":[self.row(filename="historical.csv")]
+        })
+        self.assertEqual(status,200,response)
+        self.assertEqual(len(response["created"]),1)
+        with server.db() as conn:
+            audit=evidence_audit.audit_evidence(conn)
+        self.assertEqual(audit["status"],"needs_attention")
+        self.assertEqual(audit["business_records_without_evidence"],1)
+        self.assertEqual(audit["business_without_evidence_by_type"]["finance.bank_transaction"],1)
+        self.assertEqual(audit["missing_files"],0)
+
     def test_identity_ignores_filename_and_preserves_reference(self):
         row=self.row("nov.csv",ref="000098")
         self.assertEqual(bank_source_identity.bank_reference_identity(row),
