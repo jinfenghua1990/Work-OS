@@ -571,7 +571,7 @@ function EvidenceArchivePanel(){
   const [sourceId,setSourceId]=useState('');
   const [busy,setBusy]=useState(false);
   const [status,setStatus]=useState('');
-  const [audit,setAudit]=useState<{status:string;complete:boolean;checked_at:string;file_total:number;upload_total:number;link_total:number;checked_files:number;missing_files:number;corrupted_files:number;broken_business_links:number;files_without_business_links:number;note:string}|null>(null);
+  const [audit,setAudit]=useState<{status:string;complete:boolean;checked_at:string;file_total:number;upload_total:number;link_total:number;checked_files:number;missing_files:number;corrupted_files:number;broken_business_links:number;files_without_business_links:number;business_records_without_evidence:number;note:string}|null>(null);
   const [auditing,setAuditing]=useState(false);
   async function verifyEvidence(){
     setAuditing(true);setStatus('');
@@ -600,7 +600,7 @@ function EvidenceArchivePanel(){
   }
   return <div className="panel finance-panel">
     <div className="panel-heading"><div><h2>统一原始凭证档案</h2><p>银行、进销项、采购、销售原件集中保存；与发票认领、税务认证分别处理。</p></div><div><strong>{rows.length} 条档案记录</strong><button type="button" className="secondary-button" disabled={auditing} onClick={()=>void verifyEvidence()}>{auditing?'核验中…':'核验档案完整性'}</button></div></div>
-    {audit&&<p role="status"><strong>{audit.status==='passed'?'当前档案校验通过':audit.status==='partial'?'仅完成部分核验':'发现待处理问题'}</strong> · 已核验 {audit.checked_files}/{audit.file_total} 份原件 · 上传记录 {audit.upload_total} 次 · 单据关联 {audit.link_total} 条 · 遗失 {audit.missing_files} · 校验异常 {audit.corrupted_files} · 单据关联异常 {audit.broken_business_links} · 待关联原件 {audit.files_without_business_links}。{audit.note}</p>}
+    {audit&&<p role="status"><strong>{audit.status==='passed'?'当前档案校验通过':audit.status==='partial'?'仅完成部分核验':'发现待处理问题'}</strong> · 已核验 {audit.checked_files}/{audit.file_total} 份原件 · 上传记录 {audit.upload_total} 次 · 单据关联 {audit.link_total} 条 · 遗失 {audit.missing_files} · 校验异常 {audit.corrupted_files} · 单据关联异常 {audit.broken_business_links} · 待关联原件 {audit.files_without_business_links} · 未关联原件的业务记录 {audit.business_records_without_evidence}。{audit.note}</p>}
     <form onSubmit={e=>void upload(e)} className="form-split">
       <label>选择文件<input type="file" accept=".csv,.xls,.xlsx,.pdf,.ofd,.xml,.zip,.txt" required onChange={e=>setSourceFile(e.target.files?.[0]||null)}/></label>
       <label>凭证类别<select value={category} onChange={e=>setCategory(e.target.value)}>
