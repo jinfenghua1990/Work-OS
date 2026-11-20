@@ -2966,6 +2966,94 @@ class Api(BaseHTTPRequestHandler):
             raise ValueError(f"return quantity exceeds traced sold quantity for SKU {sku}")
         return total_cost.quantize(CENT)
 
+    def refund_sale_line(self,sale_line_id:str,data:dict)->None:
+        """Customer refund / partial price adjustment without physical return."""
+        source_key=str(data.get("source_key") or "").strip()
+        refunded_on=str(data.get("refunded_on") or date.today().isoformat())
+        reason=str(data.get("reason") or "").strip()
+        archive_id=str(data.get("archive_file_id") or "").strip()
+        value=amount(data.get("amount","0"),"refund amount")
+        if not source_key or value<=0 or not reason or len(reason)>500:
+            raise ValueError("refund requires a unique reference, positive amount and explanation")
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM sales_returns WHERE source_key=?",(source_key,)).fetchone():
+                raise ValueError("source_key already identifies a physical return")
+            prior=conn.execute("SELECT * FROM sales_refunds WHERE source_key=?",(source_key,)).fetchone()
+            if prior:
+                require_same_source_payload(prior,{
+                    "sale_line_id":sale_line_id,
+                    "refunded_on":refunded_on,
+                    "amount_cny":value,
+                    "reason":reason,
+                })
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"coffee.refund",prior["id"])
+                return self.reply(200,{
+                    "id":prior["id"],"duplicate":True,
+                    "amount_cny":prior["amount_cny"],
+                    "ar_credit_cny":prior["receivable_credit_cny"],
+                    "customer_refund_due_cny":prior["customer_refund_due_cny"],
+                })
+            line=conn.execute(
+                "SELECT l.*,i.id AS import_id,i.business_line,i.entity_code,i.project_code "
+                "FROM sale_lines l JOIN sales_imports i ON i.id=l.import_id WHERE l.id=?",
+                (sale_line_id,)
+            ).fetchone()
+            if not line:
+                raise ValueError("original sale line was not found")
+            ensure_open(conn,refunded_on)
+            remaining=coffee_refund_only.remaining_revenue(conn,line)
+            if value>remaining:
+                raise ValueError(f"refund exceeds remaining original sale revenue: CNY {remaining}")
+            ar=conn.execute(
+                "SELECT * FROM receivables_payables WHERE direction='receivable' "
+                "AND source_id=? AND source_type IN ('sale','legacy_sale') ORDER BY created_at LIMIT 1",
+                (line["import_id"],)
+            ).fetchone()
+            fx=conn.execute("SELECT * FROM open_item_fx WHERE item_id=?",(ar["id"],)).fetchone() if ar else None
+            if not ar or not fx or ar["currency"]!="CNY":
+                raise ValueError("sale receivable needs finance review before refund")
+            available=max(Decimal(0),Decimal(ar["original_amount"])-Decimal(ar["settled_amount"]))
+            ar_credit=min(available,value).quantize(CENT)
+            refund_due=(value-ar_credit).quantize(CENT)
+            refund_id=str(uuid4())
+            conn.execute(
+                "INSERT INTO sales_refunds (id,source_key,sale_line_id,refunded_on,"
+                "amount_cny,receivable_credit_cny,customer_refund_due_cny,reason,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (refund_id,source_key,sale_line_id,refunded_on,str(value),
+                 str(ar_credit),str(refund_due),reason,now())
+            )
+            if ar_credit:
+                conn.execute("UPDATE receivables_payables SET original_amount=? WHERE id=?",(
+                    str((Decimal(ar["original_amount"])-ar_credit).quantize(CENT)),ar["id"]))
+                conn.execute("UPDATE open_item_fx SET original_amount_cny=? WHERE item_id=?",(
+                    str((Decimal(fx["original_amount_cny"])-ar_credit).quantize(CENT)),ar["id"]))
+            if refund_due:
+                payable_id=str(uuid4())
+                conn.execute(
+                    "INSERT INTO receivables_payables VALUES(?,?,?,?,?,?, '0.00','CNY',NULL,?)",
+                    (payable_id,"payable","sales_refund_only",refund_id,ar["counterparty"],
+                     str(refund_due),now())
+                )
+                record_open_item_fx(conn,payable_id,refund_due,Decimal(1),
+                                    refunded_on,"sales_refund_only_due")
+            journal(conn,"sales_refund_only",refund_id,refunded_on,[
+                ("sales_revenue",value,Decimal(0)),
+                ("accounts_receivable",Decimal(0),ar_credit),
+                ("accounts_payable",Decimal(0),refund_due),
+            ],line["business_line"],line["entity_code"],line["project_code"],"CNY")
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"coffee.refund",refund_id)
+            return self.reply(201,{
+                "id":refund_id,"duplicate":False,"sale_line_id":sale_line_id,
+                "amount_cny":str(value),"ar_credit_cny":str(ar_credit),
+                "customer_refund_due_cny":str(refund_due),
+                "cogs_reversed_cny":"0.00","stock_restored":False,
+                "posting_status":"posted"
+            })
+
     def return_sale_line(self,sale_line_id:str,data:dict)->None:
         source_key=str(data.get("source_key","")).strip();returned_on=str(data.get("returned_on",date.today().isoformat()))
         try:quantity=int(data.get("quantity",0));package_quantity=int(data.get("packaging_quantity",0));datetime.strptime(returned_on,"%Y-%m-%d")
