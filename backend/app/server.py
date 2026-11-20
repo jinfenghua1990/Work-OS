@@ -2516,6 +2516,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"import_id":import_id,"duplicate":False,"lines":summary,"revenue":str(revenue),"cost_of_goods_sold":str(cogs),"gross_profit":str(revenue-cogs)})
 
     def import_sale_row(self, data: dict) -> None:
+        archive_id = str(data.get("archive_file_id") or "").strip()
         # Files are upload carriers, not business identities. A renamed or
         # re-exported CSV must not post the same marketplace sale twice.
         identity = normalize_sale_source(data)
@@ -2546,6 +2547,8 @@ class Api(BaseHTTPRequestHandler):
                 recorded={"source":posted["source"],"sold_on":posted["sold_on"],"business_line":posted["business_line"],"entity_code":posted["entity_code"],"project_code":posted["project_code"],"sku":posted["sku"],"quantity":int(posted["quantity"]),"unit_price":str(amount(posted["unit_price"],"recorded unit_price")),"channel":posted["channel"] or "","customer":posted["counterparty"] or "未指定客户"}
                 if submitted!=recorded:
                     raise ValueError("source row is already posted with different business data; reconcile it with a sales return or reviewed correction")
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"coffee.sale",row_key)
                 return self.reply(200, {"duplicate": True, "status": "posted", "result": json.loads(prior["result"])})
             if prior:
                 conn.execute("DELETE FROM import_rows WHERE source_key=?", (row_key,))
@@ -2553,6 +2556,8 @@ class Api(BaseHTTPRequestHandler):
             try:
                 payload = {"source": data.get("source", "file_import"), "sold_on": data.get("sold_on", date.today().isoformat()), "sku": data["sku"], "quantity": data["quantity"], "unit_price": data["unit_price"], "channel": str(data.get("channel", "")).strip(), "business_line": data.get("business_line", "coffee"), "entity_code": data.get("entity_code", "main"), "project_code": data.get("project_code"), "customer": data.get("customer", "未指定客户")}
                 result = self.post_sale(conn, payload, row_key)
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"coffee.sale",row_key)
                 conn.execute("INSERT INTO import_rows VALUES(?,?,?,?,?,?)", (str(uuid4()), row_key, json.dumps(data, ensure_ascii=False), "posted", json.dumps(result, ensure_ascii=False), now()))
                 conn.execute("RELEASE SAVEPOINT import_row")
                 return self.reply(201, {"duplicate": False, "status": "posted", "result": result})
@@ -2832,6 +2837,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(200,{"bank_account_id":account_id,"period":period,"currency":account["currency"],"imported_inflow":str(inflow.quantize(CENT)),"imported_outflow":str(outflow.quantize(CENT)),"difference":str(difference),"reconciled":difference==0,"status":"reconciled" if difference==0 else "difference_requires_review"})
 
     def import_bank(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         rows = data.get("rows")
         if not isinstance(rows, list) or not rows:
             raise ValueError("rows must contain at least one bank transaction")
@@ -2876,6 +2882,8 @@ class Api(BaseHTTPRequestHandler):
                     if existing:
                         if any(str(existing[name] if existing[name] is not None else "") != str(val if val is not None else "") for name, val in payload.items()):
                             raise ValueError("external bank source is already recorded with a different payload; reconcile the source record")
+                        if archive_id:
+                            original_archive.link_document(conn,archive_id,"finance.bank_transaction",existing["id"])
                         duplicates.append(key)
                         continue
                     bank_account = conn.execute("SELECT * FROM bank_accounts WHERE account_name=?", (account_name,)).fetchone()
@@ -2886,6 +2894,8 @@ class Api(BaseHTTPRequestHandler):
                     ensure_open(conn, day)
                     row_id = str(uuid4())
                     conn.execute("INSERT INTO bank_transactions (id,source_key,transaction_on,account_name,bank_reference,description,direction,amount,currency,created_at,exchange_rate,rate_date,rate_source,base_amount_cny,source_system,source_document_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (row_id, key, day, account_name, bank_reference, description, direction, str(value), currency, now(), str(rate), rate_date, rate_source, str(base_amount), source_system, source_document_id))
+                    if archive_id:
+                        original_archive.link_document(conn,archive_id,"finance.bank_transaction",row_id)
                     created.append({"source_key": key, "source_system": source_system or None, "source_document_id": source_document_id or None, "id": row_id})
                 except (ValueError, KeyError, TypeError) as exc:
                     rejected.append({"row": index, "source_key": row.get("source_key"), "error": str(exc)})
