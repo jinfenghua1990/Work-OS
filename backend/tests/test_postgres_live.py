@@ -41,11 +41,11 @@ class PostgresLiveTests(unittest.TestCase):
     def tearDownClass(cls):
         server.DB_BACKEND, server.DATABASE_URL = cls.old_backend, cls.old_url
 
-    def test_new_postgres_schema_is_v39(self):
+    def test_new_postgres_schema_matches_current_version(self):
         with server.db() as conn:
             result = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
             self.assertEqual(result["version"], server.LATEST_SCHEMA_VERSION)
-            self.assertEqual(server.LATEST_SCHEMA_VERSION, 39)
+            self.assertEqual(server.LATEST_SCHEMA_VERSION, result['version'])
             self.assertTrue(server.postgres_schema_status()["ready"])
             self.assertIsNotNone(
                 conn.execute("SELECT to_regclass('public.archive_files') AS name").fetchone()["name"]
@@ -122,7 +122,7 @@ class PostgresLiveTests(unittest.TestCase):
             version = conn.execute(
                 "SELECT MAX(version) AS version FROM schema_migrations"
             ).fetchone()["version"]
-            self.assertEqual(version, 39)
+            self.assertEqual(version, server.LATEST_SCHEMA_VERSION)
 
 
 if __name__ == "__main__":

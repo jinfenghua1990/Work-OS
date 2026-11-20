@@ -13,6 +13,7 @@ import original_archive
 
 BUSINESS_SOURCES = {
     "coffee.sale": ("sale_lines", "source_row_key"),
+    "coffee.refund": ("sales_refunds", "id"),
     "coffee.purchase": ("purchases", "id"),
     "bike.sale": ("bike_sales", "id"),
     "finance.invoice": ("invoices", "id"),

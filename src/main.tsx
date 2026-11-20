@@ -41,7 +41,7 @@ type PackagingRule = {sku:string;packaging_sku:string|null;packaging_per_unit:nu
 type InventoryMovement = {id:string;sku:string;movement_type:string;quantity:number;unit_cost:string;source_type:string;source_id:string;created_at:string;effective_on?:string;currency:string}
 type PurchaseReceiptRow={id:string;source_key:string;quantity:number;received_on:string}
 type PurchaseRow = { id: string; number: string; supplier: string; sku: string; item_type: string; ordered_qty: number; unit_cost: string; received_qty: number; receipts:PurchaseReceiptRow[]; document_amount:string; order_amount:string; received_amount:string; remaining_document_amount:string; received_inventory_amount:string; received_amount_difference:string; currency:string; exchange_rate:string; rate_date:string|null; business_line:string; entity_code:string; project_code:string|null; created_at?:string }
-type SalesReturnLine = {id:string;source_row_key:string;sku:string;quantity:number;unit_price:string;packaging_sku:string|null;packaging_per_unit:number;packaging_included:number;cogs_cny:string|null;returned_quantity:number;returned_packaging_quantity:number;returnable:boolean;return_trace_note:string|null;sold_on:string}
+type SalesReturnLine = {id:string;source_row_key:string;sku:string;quantity:number;unit_price:string;packaging_sku:string|null;packaging_per_unit:number;packaging_included:number;cogs_cny:string|null;returned_quantity:number;returned_packaging_quantity:number;returnable:boolean;return_trace_note:string|null;sold_on:string;refunded_amount_cny:string;remaining_refundable_cny:string}
 type OpenItem = {id:string;direction:'receivable'|'payable';source_type:string;source_id:string;counterparty:string;original_amount:string;settled_amount:string;currency:string;due_on:string|null;original_amount_cny:string|null;settled_amount_cny:string|null;book_exchange_rate:string|null;book_rate_date:string|null;book_rate_source:string|null}
 type BankRow = {id:string;source_key:string;transaction_on:string;account_name:string;bank_reference:string;description:string;direction:'in'|'out';amount:string;currency:string;exchange_rate:string|null;rate_date:string|null;rate_source:string|null;base_amount_cny:string|null;cash_flow_category:'operating'|'investing'|'financing'|'transfer'|'unclassified';cash_flow_note:string|null;allocated_amount:string;remaining_amount:string;allocated_base_amount_cny:string;remaining_base_amount_cny:string|null}
 type BankAccountSummary={id:string;account_name:string;currency:string;period:string;transactions:number;inflow:string;outflow:string;opening_balance:string|null;closing_balance:string|null;statement_reference:string|null;note:string|null;difference:string|null;reconciled:boolean}
@@ -336,13 +336,74 @@ function CoffeeStockCover(){
   </div>
 }
 
+function RefundOnlyForm({lines,onSaved}:{lines:SalesReturnLine[];onSaved:()=>Promise<void>}){
+  const [saleLineId,setSaleLineId]=useState('')
+  const [file,setFile]=useState<File|null>(null)
+  const [busy,setBusy]=useState(false)
+  const [error,setError]=useState('')
+  const [success,setSuccess]=useState('')
+  const line=lines.find(x=>x.id===saleLineId)
+  async function submit(event:React.FormEvent<HTMLFormElement>){
+    event.preventDefault()
+    if(!line)return
+    const form=event.currentTarget
+    const values=Object.fromEntries(new FormData(form).entries())
+    setBusy(true);setError('');setSuccess('')
+    try{
+      let archive_file_id:string|undefined
+      if(file){
+        const proof=await archiveOriginal(file,'sales',String(values.refunded_on).slice(0,7),'coffee.refund')
+        archive_file_id=proof.id
+      }
+      const response=await fetch(`/api/sales/lines/${line.id}/refund`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({...values,archive_file_id})
+      })
+      const result=await response.json()
+      if(!response.ok)throw new Error(result.error||'仅退款过账失败')
+      setSuccess(result.duplicate?'已存在同一退款单号，未重复入账':'仅退款已记录，未增加库存')
+      await onSaved()
+      form.reset();setSaleLineId('');setFile(null)
+    }catch(e){setError(e instanceof Error?e.message:'仅退款记录失败')}
+    finally{setBusy(false)}
+  }
+  return <form className="receive-form" onSubmit={e=>void submit(e)}>
+    <p>仅退款不产生实物入库或成本冲回；已收款部分记入待退客户款，实际打款仍需银行流水核销。</p>
+    <label>原销售行<select value={saleLineId} onChange={e=>setSaleLineId(e.target.value)} required>
+      <option value="">选择需要退款的销售行</option>
+      {lines.filter(row=>Number(row.remaining_refundable_cny)>0).map(row=><option key={row.id} value={row.id}>
+        {row.sold_on} · {row.sku} · {row.source_row_key} · 最高可退 CNY {row.remaining_refundable_cny}
+      </option>)}
+    </select></label>
+    {line&&<p>已退实物 {line.returned_quantity} 件 · 已仅退款 CNY {line.refunded_amount_cny} · 可退款 CNY {line.remaining_refundable_cny}</p>}
+    <div className="form-split">
+      <label>退款金额 CNY<input name="amount" type="number" step="0.01" min="0.01"
+        max={line?.remaining_refundable_cny} required disabled={!line}/></label>
+      <label>退款确认日期<input name="refunded_on" type="date"
+        defaultValue={new Date().toLocaleDateString('sv-SE')} required/></label>
+    </div>
+    <div className="form-split">
+      <label>平台退款单号／来源键<input name="source_key" required placeholder="来自平台的真实退款编号"/></label>
+      <label>仅退款原因<input name="reason" required maxLength={500} placeholder="例如：少发货补偿、价格调整"/></label>
+    </div>
+    <label>退款原始凭证（建议上传）<input type="file" accept=".pdf,.ofd,.xml,.csv,.xlsx"
+      onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
+    {error&&<p className="form-error">{error}</p>}{success&&<p role="status">{success}</p>}
+    <button className="primary-button" disabled={busy||!line||Number(line.remaining_refundable_cny)<=0}>
+      {busy?'登记中…':'确认仅退款，不增加库存'}
+    </button>
+  </form>
+}
+
 function SalesReturnsWorkspace({refresh}:{refresh:()=>Promise<void>}){
   const [lines,setLines]=useState<SalesReturnLine[]>([]);const [selected,setSelected]=useState('');const [quantity,setQuantity]=useState(1);const [sourceKey,setSourceKey]=useState(()=>crypto.randomUUID());const [error,setError]=useState('');const [busy,setBusy]=useState(false)
   async function load(){const response=await fetch('/api/sales/returns');const data=await response.json();if(!response.ok)throw new Error(data.error||'销售行读取失败');setLines(data as SalesReturnLine[])}
   useEffect(()=>{void load().catch(reason=>setError(reason instanceof Error?reason.message:'本地 API 不可用'))},[])
   const line=lines.find(item=>item.id===selected);const remaining=line?line.quantity-line.returned_quantity:0;const remainingPackaging=line?line.quantity*line.packaging_per_unit-line.returned_packaging_quantity:0;const packagingCap=line&&!line.packaging_included?Math.min(remainingPackaging,quantity*line.packaging_per_unit):0
   async function submit(event:React.FormEvent<HTMLFormElement>){event.preventDefault();if(!line)return;const target=event.currentTarget;const fields=Object.fromEntries(new FormData(target).entries());setBusy(true);setError('');try{const response=await fetch(`/api/sales/lines/${line.id}/return`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...fields,source_key:sourceKey})});const data=await response.json();if(!response.ok)throw new Error(data.error||'销售退货过账失败');await refresh();await load();setSelected('');setQuantity(1);setSourceKey(crypto.randomUUID());target.reset()}catch(reason){setError(reason instanceof Error?reason.message:'销售退货过账失败')}finally{setBusy(false)}}
-  return <div className="panel purchase-list"><div className="panel-heading"><div><h2>销售退货</h2><p>按原销售行和 FIFO 批次成本冲回收入、应收、销售成本与库存。</p></div><button className="secondary-button" onClick={()=>void load()}>刷新</button></div><div className="trial-balance-empty">退货收入先抵减未结应收；已收款部分形成应付客户退款。退回包装数量单独登记。旧销售缺少库存层追溯信息时不会自动估价退货。</div><form className="receive-form" onSubmit={submit}><label>原销售行<select value={selected} onChange={event=>{setSelected(event.target.value);setQuantity(1)}} required><option value="">选择原销售行</option>{lines.filter(item=>item.returnable&&item.returned_quantity<item.quantity).map(item=><option key={item.id} value={item.id}>{item.sold_on} · {item.sku} · {item.source_row_key} · 可退 {item.quantity-item.returned_quantity} 件</option>)}</select></label>{line&&<div className="sample-rule-note">来源行 {line.source_row_key} · 已售 {line.quantity} · 已退 {line.returned_quantity} · 单价 CNY {line.unit_price} · 原销售成本 CNY {line.cogs_cny}</div>}<input type="hidden" name="source_key" value={sourceKey}/><small className="sample-rule-note">固定来源键：{sourceKey}</small><div className="form-split"><label>退回成品数量<input name="quantity" type="number" min="1" max={remaining||undefined} value={quantity} onChange={event=>setQuantity(Math.max(1,Number(event.target.value)||1))} required/></label><label>退货日期<input name="returned_on" type="date" defaultValue={new Date().toLocaleDateString('sv-SE')} required/></label></div>{line&&!line.packaging_included&&line.packaging_per_unit>0&&<label>同时退回的包装数量（上限 {packagingCap}）<input name="packaging_quantity" type="number" min="0" max={packagingCap} defaultValue="0" required/></label>}{line&&(line.packaging_included||line.packaging_per_unit===0)&&<input type="hidden" name="packaging_quantity" value="0"/>}{error&&<div className="form-error">{error}</div>}<button className="primary-button" disabled={busy||!line||!line.returnable||remaining<1}>{busy?'过账中…':'确认销售退货并生成冲回分录'}</button></form><div className="project-actual-table"><div className="project-actual-head"><span>来源销售行</span><span>已售</span><span>已退</span><span>状态</span></div>{lines.map(item=><div className="project-actual-row" key={item.id}><span>{item.sku} · {item.source_row_key}<small>{item.sold_on} · 单价 CNY {item.unit_price}</small></span><span>{item.quantity}</span><span>{item.returned_quantity}</span><strong className={item.returnable?'good':'bad'}>{item.returnable?'可退':'不可追溯'}</strong>{!item.returnable&&item.return_trace_note&&<small>{item.return_trace_note}</small>}</div>)}</div></div>
+  return <div className="panel purchase-list"><div className="panel-heading"><div><h2>销售退货</h2><p>按原销售行和 FIFO 批次成本冲回收入、应收、销售成本与库存。</p></div><button className="secondary-button" onClick={()=>void load()}>刷新</button></div><div className="trial-balance-empty">退货收入先抵减未结应收；已收款部分形成应付客户退款。退回包装数量单独登记。旧销售缺少库存层追溯信息时不会自动估价退货。</div><form className="receive-form" onSubmit={submit}><label>原销售行<select value={selected} onChange={event=>{setSelected(event.target.value);setQuantity(1)}} required><option value="">选择原销售行</option>{lines.filter(item=>item.returnable&&item.returned_quantity<item.quantity).map(item=><option key={item.id} value={item.id}>{item.sold_on} · {item.sku} · {item.source_row_key} · 可退 {item.quantity-item.returned_quantity} 件</option>)}</select></label>{line&&<div className="sample-rule-note">来源行 {line.source_row_key} · 已售 {line.quantity} · 已退 {line.returned_quantity} · 单价 CNY {line.unit_price} · 原销售成本 CNY {line.cogs_cny}</div>}<input type="hidden" name="source_key" value={sourceKey}/><small className="sample-rule-note">固定来源键：{sourceKey}</small><div className="form-split"><label>退回成品数量<input name="quantity" type="number" min="1" max={remaining||undefined} value={quantity} onChange={event=>setQuantity(Math.max(1,Number(event.target.value)||1))} required/></label><label>退货日期<input name="returned_on" type="date" defaultValue={new Date().toLocaleDateString('sv-SE')} required/></label></div>{line&&!line.packaging_included&&line.packaging_per_unit>0&&<label>同时退回的包装数量（上限 {packagingCap}）<input name="packaging_quantity" type="number" min="0" max={packagingCap} defaultValue="0" required/></label>}{line&&(line.packaging_included||line.packaging_per_unit===0)&&<input type="hidden" name="packaging_quantity" value="0"/>}{error&&<div className="form-error">{error}</div>}<button className="primary-button" disabled={busy||!line||!line.returnable||remaining<1}>{busy?'过账中…':'确认销售退货并生成冲回分录'}</button></form><details className="panel"><summary><strong>仅退款（不退货、不增加库存）</strong></summary>
+  <RefundOnlyForm lines={lines} onSaved={async()=>{await refresh();await load()}}/>
+</details><div className="project-actual-table"><div className="project-actual-head"><span>来源销售行</span><span>已售</span><span>已退</span><span>状态</span></div>{lines.map(item=><div className="project-actual-row" key={item.id}><span>{item.sku} · {item.source_row_key}<small>{item.sold_on} · 单价 CNY {item.unit_price} · 已仅退款 CNY {item.refunded_amount_cny} · 剩余可退款 CNY {item.remaining_refundable_cny}</small></span><span>{item.quantity}</span><span>{item.returned_quantity}</span><strong className={item.returnable?'good':'bad'}>{item.returnable?'可退':'不可追溯'}</strong>{!item.returnable&&item.return_trace_note&&<small>{item.return_trace_note}</small>}</div>)}</div></div>
 }
 
 function BikeWorkspace({orders,costs,sales,tab,refresh}:{orders:BikeOrder[];costs:BikeLandedCost[];sales:BikeSale[];tab:Tab;refresh:()=>Promise<void>}){
