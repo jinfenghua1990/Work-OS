@@ -2488,7 +2488,7 @@ class Api(BaseHTTPRequestHandler):
         day = str(data.get("sold_on", date.today().isoformat()))
         business_line = str(data.get("business_line", "coffee")).strip()
         entity_code = str(data.get("entity_code", "main")).strip()
-        project_code = str(data.get("project_code", "")).strip() or None
+        project_code = str(data.get("project_code") or "").strip() or None
         if business_line != "coffee" or not entity_code:
             raise ValueError("coffee sales require business_line=coffee and a legal entity code")
         ensure_open(conn, day)
