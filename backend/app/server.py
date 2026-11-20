@@ -45,7 +45,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 37
+LATEST_SCHEMA_VERSION = 38
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -248,6 +248,24 @@ def ensure_postgres_triggers(conn: PostgresConnection) -> None:
         conn.execute("CREATE TRIGGER tr_open_item_fx_cny AFTER INSERT ON receivables_payables FOR EACH ROW EXECUTE FUNCTION workos_open_item_fx_default()")
 
 
+def ensure_tax_history_period_columns(conn) -> None:
+    # Old tax history is preserved as written. Dates for historic rows remain
+    # UNKNOWN rather than being guessed from issue date or change timestamp.
+    cols={row["name"] for row in conn.execute("PRAGMA table_info(invoice_tax_history)")}
+    if "effective_on" not in cols:
+        conn.execute("ALTER TABLE invoice_tax_history ADD COLUMN effective_on TEXT")
+    if "tax_period" not in cols:
+        conn.execute("ALTER TABLE invoice_tax_history ADD COLUMN tax_period TEXT")
+    bike_cols={row["name"] for row in conn.execute("PRAGMA table_info(bike_landed_costs)")}
+    if "cost_treatment" not in bike_cols:
+        # Preserve historical already-posted capitalization; do NOT rewrite
+        # previously closed books or silently convert old warehouse entries.
+        conn.execute("ALTER TABLE bike_landed_costs ADD COLUMN cost_treatment TEXT NOT NULL DEFAULT 'capitalized'")
+    if "capitalization_basis" not in bike_cols:
+        conn.execute("ALTER TABLE bike_landed_costs ADD COLUMN capitalization_basis TEXT NOT NULL DEFAULT ''")
+    conn.execute("UPDATE bike_landed_costs SET cost_treatment='tax_pending' WHERE cost_type='import_vat' AND cost_treatment='capitalized'")
+
+
 def init_db() -> None:
     with db() as conn:
         if getattr(conn, "is_postgres", False):
@@ -257,10 +275,13 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
-                if version is not None and int(version) == 36:
+                if version is not None and int(version) in (36,37):
                     conn.execute("BEGIN")
-                    original_archive.ensure_tables(conn)
-                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    if int(version)==36:
+                        original_archive.ensure_tables(conn)
+                        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    ensure_tax_history_period_columns(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -286,6 +307,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(36,?)", (datetime.now(timezone.utc).isoformat(),))
                     original_archive.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    ensure_tax_history_period_columns(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -811,6 +834,8 @@ def init_db() -> None:
         conn.execute("UPDATE stock_layers SET exchange_rate=COALESCE((SELECT exchange_rate FROM purchases WHERE purchases.id=stock_layers.purchase_id),exchange_rate)")
         original_archive.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+        ensure_tax_history_period_columns(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1143,7 +1168,7 @@ class Api(BaseHTTPRequestHandler):
                     if movement["base_unit_cost_cny"] is None:unvalued_inventory+=1
                     else:coffee_value+=Decimal(movement["quantity"])*Decimal(movement["base_unit_cost_cny"])
                 bike_receipts=sum((Decimal(row[0]) for row in conn.execute("SELECT contract_cost_cny FROM bike_receipts WHERE received_on<=?",(as_of,))),Decimal(0))
-                bike_costs=sum((Decimal(row[0]) for row in conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE incurred_on<=? AND cost_type!='import_vat'",(as_of,))),Decimal(0))
+                bike_costs=sum((Decimal(row[0]) for row in conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE incurred_on<=? AND cost_treatment='capitalized'",(as_of,))),Decimal(0))
                 bike_cogs=sum((Decimal(row[0]) for row in conn.execute("SELECT cogs_cny FROM bike_sales WHERE sold_on<=?",(as_of,))),Decimal(0))
                 inventory_subledger=(coffee_value+bike_receipts+bike_costs-bike_cogs).quantize(CENT)
                 inventory_gl=sum((balances.get(code,[Decimal(0),Decimal(0)])[0]-balances.get(code,[Decimal(0),Decimal(0)])[1] for code in ("inventory","inventory:bike")),Decimal(0)).quantize(CENT)
@@ -1234,7 +1259,7 @@ class Api(BaseHTTPRequestHandler):
                             if item:
                                 settled = Decimal(item["settled_amount"])
                         milestones.append({**dict(milestone),"settled_amount":str(settled.quantize(CENT)),"outstanding_amount":str((Decimal(milestone["amount"])-settled).quantize(CENT)),"status":"planned" if not milestone["payable_id"] else "paid" if settled>=Decimal(milestone["amount"]) else "due"})
-                    landed_rows = conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE bike_order_id=? AND cost_type!='import_vat'", (order["id"],)).fetchall()
+                    landed_rows = conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE bike_order_id=? AND cost_treatment='capitalized'", (order["id"],)).fetchall()
                     sold_rows=conn.execute("SELECT quantity FROM bike_sales WHERE bike_order_id=?",(order["id"],)).fetchall()
                     sold_quantity=sum((int(row["quantity"]) for row in sold_rows),0)
                     receipt_rows=conn.execute("SELECT quantity FROM bike_receipts WHERE bike_order_id=?",(order["id"],)).fetchall()
@@ -1850,6 +1875,17 @@ class Api(BaseHTTPRequestHandler):
         source_key=str(data.get("source_key", "")).strip()
         order_id=str(data.get("bike_order_id", "")).strip()
         cost_type=str(data.get("cost_type", "")).strip()
+        capitalization_basis=str(data.get("capitalization_basis") or "").strip()
+        treatment=("tax_pending" if cost_type=="import_vat" else
+                   "capitalized" if cost_type in ("freight","duty") else
+                   "period_expense" if cost_type=="warehouse" else
+                   str(data.get("cost_treatment") or "period_expense").strip())
+        if treatment not in ("tax_pending","capitalized","period_expense"):
+            raise ValueError("invalid bicycle cost treatment")
+        if cost_type=="other" and treatment=="capitalized" and not capitalization_basis:
+            raise ValueError("other costs require an explicit acquisition capitalization basis")
+        if cost_type=="other" and treatment=="tax_pending":
+            raise ValueError("tax pending treatment is only valid for import VAT")
         counterparty=str(data.get("counterparty", "")).strip()
         reference_no=str(data.get("reference_no", "")).strip()
         incurred_on=str(data.get("incurred_on", date.today().isoformat()))
@@ -1867,25 +1903,27 @@ class Api(BaseHTTPRequestHandler):
             conn.execute("BEGIN IMMEDIATE")
             existing=conn.execute("SELECT * FROM bike_landed_costs WHERE source_key=?",(source_key,)).fetchone()
             if existing:
-                require_same_source_payload(existing,{"bike_order_id":order_id,"cost_type":cost_type,"counterparty":counterparty,"reference_no":reference_no,"incurred_on":incurred_on,"amount":value,"currency":currency,"exchange_rate":rate,"rate_date":rate_date})
+                require_same_source_payload(existing,{"bike_order_id":order_id,"cost_type":cost_type,"counterparty":counterparty,"reference_no":reference_no,"incurred_on":incurred_on,"amount":value,"currency":currency,"exchange_rate":rate,"rate_date":rate_date,"cost_treatment":treatment,"capitalization_basis":capitalization_basis})
                 return self.reply(200,{"id":existing["id"],"duplicate":True})
             order=conn.execute("SELECT * FROM bike_orders WHERE id=?",(order_id,)).fetchone()
             if not order:
                 raise ValueError("ALSVID purchase reference not found")
-            if conn.execute("SELECT 1 FROM bike_sales WHERE bike_order_id=? LIMIT 1",(order_id,)).fetchone():
-                raise ValueError("landed costs are locked after sales imports; cost adjustments require a reviewed adjustment workflow")
+            if treatment=="capitalized" and conn.execute("SELECT 1 FROM bike_sales WHERE bike_order_id=? LIMIT 1",(order_id,)).fetchone():
+                raise ValueError("capitalized landed costs are locked after sales imports; later adjustments require review")
             ensure_open(conn,incurred_on)
             cost_id=str(uuid4())
             base=(value*rate).quantize(CENT,rounding=ROUND_HALF_UP)
             posted_payable=None
-            if cost_type!="import_vat":
+            if treatment!="tax_pending":
                 posted_payable=str(uuid4())
-            conn.execute("INSERT INTO bike_landed_costs (id,source_key,bike_order_id,cost_type,counterparty,reference_no,incurred_on,amount,currency,exchange_rate,rate_date,base_amount_cny,payable_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cost_id,source_key,order_id,cost_type,counterparty,reference_no,incurred_on,str(value),currency,str(rate),rate_date,str(base),posted_payable,now()))
+            conn.execute("INSERT INTO bike_landed_costs (id,source_key,bike_order_id,cost_type,counterparty,reference_no,incurred_on,amount,currency,exchange_rate,rate_date,base_amount_cny,payable_id,created_at,cost_treatment,capitalization_basis) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cost_id,source_key,order_id,cost_type,counterparty,reference_no,incurred_on,str(value),currency,str(rate),rate_date,str(base),posted_payable,now(),treatment,capitalization_basis))
             if posted_payable:
                 conn.execute("INSERT INTO receivables_payables VALUES(?,?,?,?,?,?, '0.00',?,NULL,?)",(posted_payable,"payable","bike_landed_cost",cost_id,counterparty,str(value),currency,now()))
                 record_open_item_fx(conn,posted_payable,base,rate,rate_date,"landed_cost_entry")
-                journal(conn,"bike_landed_cost",cost_id,incurred_on,[("inventory:bike",base,Decimal(0)),("accounts_payable",Decimal(0),base)],"bike",order["entity_code"],currency="CNY")
-            return self.reply(201,{"id":cost_id,"source_key":source_key,"amount":str(value),"currency":currency,"base_amount_cny":str(base),"cost_type":cost_type,"capitalized":cost_type!="import_vat","payable_id":posted_payable})
+                expense_account="operating_expense:logistics" if cost_type=="warehouse" else "operating_expense:other"
+                debit_account="inventory:bike" if treatment=="capitalized" else expense_account
+                journal(conn,"bike_landed_cost",cost_id,incurred_on,[(debit_account,base,Decimal(0)),("accounts_payable",Decimal(0),base)],"bike",order["entity_code"],currency="CNY")
+            return self.reply(201,{"id":cost_id,"source_key":source_key,"amount":str(value),"currency":currency,"base_amount_cny":str(base),"cost_type":cost_type,"cost_treatment":treatment,"capitalized":treatment=="capitalized","payable_id":posted_payable})
 
     def import_bike_sale(self, data: dict) -> None:
         source_key=str(data.get("source_key", "")).strip()
@@ -1929,7 +1967,7 @@ class Api(BaseHTTPRequestHandler):
             received_quantity=sum((int(row["quantity"]) for row in receipt_rows),0)
             if already_sold+quantity>received_quantity:
                 raise ValueError(f"sale quantity exceeds ALSVID-reconciled received quantity; available to sell: {max(0,received_quantity-already_sold)}")
-            cost_rows=conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE bike_order_id=? AND cost_type!='import_vat'",(order["id"],)).fetchall()
+            cost_rows=conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE bike_order_id=? AND cost_treatment='capitalized'",(order["id"],)).fetchall()
             contract_cny=(Decimal(order["contract_amount"])*Decimal(order["exchange_rate"])).quantize(CENT,rounding=ROUND_HALF_UP)
             landed_cny=sum((Decimal(row["base_amount_cny"]) for row in cost_rows),Decimal(0)).quantize(CENT,rounding=ROUND_HALF_UP)
             unit_cost=((contract_cny+landed_cny)/Decimal(order["quantity"])).quantize(CENT,rounding=ROUND_HALF_UP)
@@ -3124,6 +3162,13 @@ class Api(BaseHTTPRequestHandler):
 
     def update_invoice_tax_status(self, data: dict) -> None:
         invoice_id, status = str(data["invoice_id"]), str(data["tax_status"])
+        effective_on=str(data.get("effective_on") or date.today().isoformat())
+        if len(effective_on)!=10:
+            raise ValueError("tax status effective_on must use YYYY-MM-DD")
+        try:
+            datetime.strptime(effective_on,"%Y-%m-%d")
+        except ValueError:
+            raise ValueError("tax status effective_on must be a valid date")
         if status not in ("pending", "eligible", "certified_deductible", "non_deductible", "void"):
             raise ValueError("invalid tax status")
         with db() as conn:
@@ -3136,13 +3181,17 @@ class Api(BaseHTTPRequestHandler):
             evidence = str(data.get("tax_evidence_ref", "")).strip() or None
             if status == "certified_deductible" and not evidence:
                 raise ValueError("税务机关认证依据编号必填；发票登记或内部认领不等于税务确认")
+            if effective_on < invoice["issued_on"]:
+                raise ValueError("tax confirmation date cannot precede invoice issue date")
             changed=invoice["tax_status"] != status or invoice["tax_evidence_ref"] != evidence
             if not changed:
                 return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "tax_credit_recognized": False, "accounting_effect": "none", "duplicate": True})
-            ensure_open(conn,invoice["issued_on"])
+            # The fiscal period of this later action controls locking, not the
+            # original invoice issue month, which may be legitimately closed.
+            ensure_open(conn,effective_on)
             conn.execute("UPDATE invoices SET tax_status=?,tax_evidence_ref=? WHERE id=?", (status, evidence, invoice_id))
-            conn.execute("INSERT INTO invoice_tax_history VALUES(?,?,?,?,?,?,?)", (str(uuid4()), invoice_id, invoice["tax_status"], status, evidence, now(), str(data.get("changed_by", "local-user"))))
-            return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "tax_credit_recognized": False, "accounting_effect": "none", "duplicate": False})
+            conn.execute("INSERT INTO invoice_tax_history (id,invoice_id,old_status,new_status,evidence_ref,changed_at,changed_by,effective_on,tax_period) VALUES(?,?,?,?,?,?,?,?,?)", (str(uuid4()), invoice_id, invoice["tax_status"], status, evidence, now(), str(data.get("changed_by", "local-user")),effective_on,effective_on[:7]))
+            return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "effective_on":effective_on,"tax_period":effective_on[:7],"tax_credit_recognized": False, "accounting_effect": "none", "duplicate": False})
 
     def close_period(self, data: dict) -> None:
         period = str(data["period"])
