@@ -8,6 +8,8 @@ CI starts a fresh PostgreSQL service container for these tests. They do NOT
 run against user data, remote addresses, or production databases.
 """
 import os
+import hashlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -16,6 +18,8 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 import server
+import evidence_db
+import original_archive
 
 
 class PostgresLiveTests(unittest.TestCase):
@@ -53,6 +57,44 @@ class PostgresLiveTests(unittest.TestCase):
             self.assertIsNotNone(
                 conn.execute("SELECT to_regclass('public.sample_dispositions') AS name").fetchone()["name"]
             )
+
+    def test_evidence_schema_preserves_exact_original_and_enforces_immutability(self):
+        raw=b"order_id,price\\r\\n000123,0010.50\\r\\n".replace(b"\\\\r",b"\\r").replace(b"\\\\n",b"\\n")
+        file_id=hashlib.sha256(raw).hexdigest()
+        # A dummy legacy archive metadata row lets us exercise SQL evidence
+        # independently from the disk/NAS mirror.
+        with server.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO archive_files (id,sha256,size_bytes,storage_key,created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+                (file_id,file_id,len(raw),f"{file_id[:2]}/{file_id[2:4]}/{file_id}",server.now()),
+            )
+            batch_id=f"ci-pg-evidence-{uuid4().hex}"
+            conn.execute(
+                "INSERT INTO archive_uploads "
+                "(id,file_id,original_name,category,period,source_system,uploaded_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (batch_id,file_id,"test.csv","sales","2026-11","ci-test",server.now()),
+            )
+            receipt=evidence_db.store(
+                conn,file_id,raw,batch_id,"test.csv","sales","2026-11","ci-test",
+            )
+            self.assertTrue(receipt["stored_in_database"])
+        with server.db() as conn:
+            self.assertEqual(evidence_db.fetch(conn,file_id),raw)
+            snapshot=evidence_db.source_rows(conn,file_id)
+            self.assertEqual(snapshot["parse_status"],"parsed")
+            self.assertEqual(snapshot["rows"][-1],["000123","0010.50"])
+        with self.assertRaisesRegex(Exception,"immutable"):
+            with server.db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "DELETE FROM evidence.original_documents WHERE sha256=?",
+                    (file_id,),
+                )
+        with server.db() as conn:
+            self.assertEqual(evidence_db.fetch(conn,file_id),raw)
 
     def test_purchase_and_receipt_are_persistent_across_connections(self):
         api = server.Api.__new__(server.Api)
