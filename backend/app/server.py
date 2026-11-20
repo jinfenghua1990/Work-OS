@@ -152,14 +152,24 @@ class PostgresConnection:
 
     def __init__(self, connection):
         self.connection = connection
+        # The driver uses autocommit=True to keep read-only queries from
+        # holding idle transactions. Finance writes explicitly issue BEGIN.
+        # Track these blocks so a successful request is COMMITTED, never
+        # accidentally rolled back on context-manager exit.
+        self._explicit_transaction = False
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if self.connection.info.transaction_status:
-            self.connection.rollback()
-        self.connection.close()
+        try:
+            if self._explicit_transaction:
+                # With psycopg autocommit=True, an explicitly issued SQL BEGIN
+                # must be finalized with SQL COMMIT/ROLLBACK.
+                self.connection.execute("COMMIT" if exc_type is None else "ROLLBACK")
+                self._explicit_transaction = False
+        finally:
+            self.connection.close()
 
     def execute(self, sql: str, parameters=()):
         pragma = re.fullmatch(r"\s*PRAGMA\s+(?:foreign_keys\s*=\s*ON|journal_mode\s*=\s*WAL)\s*", sql, re.I)
@@ -174,11 +184,17 @@ class PostgresConnection:
             )
             return PostgresCursor(cursor)
         sql = sql.replace("BEGIN IMMEDIATE", "BEGIN")
+        begin_statement = bool(re.fullmatch(r"\s*BEGIN\s*;?\s*", sql, re.I))
         ignore = re.match(r"\s*INSERT\s+OR\s+IGNORE\s+INTO\s", sql, re.I)
         if ignore:
             sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, count=1, flags=re.I).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
         sql = sql.replace("?", "%s")
-        return PostgresCursor(self.connection.execute(sql, parameters))
+        cursor = self.connection.execute(sql, parameters)
+        if begin_statement:
+            if self._explicit_transaction:
+                raise RuntimeError("nested PostgreSQL BEGIN is not supported by Work OS")
+            self._explicit_transaction = True
+        return PostgresCursor(cursor)
 
     def executescript(self, script: str):
         script = re.sub(r"CREATE\s+TRIGGER\s+IF\s+NOT\s+EXISTS\s+tr_open_item_fx_cny[\s\S]*?END\s*;", "", script, flags=re.I)
@@ -208,10 +224,14 @@ class PostgresConnection:
             self.execute(statement)
 
     def commit(self):
-        self.connection.commit()
+        if self._explicit_transaction:
+            self.connection.execute("COMMIT")
+            self._explicit_transaction = False
 
     def rollback(self):
-        self.connection.rollback()
+        if self._explicit_transaction:
+            self.connection.execute("ROLLBACK")
+            self._explicit_transaction = False
 
 
 def db():
