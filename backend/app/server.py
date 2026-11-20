@@ -2207,6 +2207,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,result)
 
     def save_platform_income_reconciliation(self,data:dict)->None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         period=str(data.get("period","")).strip();platform=str(data.get("platform","")).strip();store_name=str(data.get("store_name","")).strip();evidence_ref=str(data.get("evidence_ref","")).strip();note=str(data.get("note","")).strip();changed_by=str(data.get("changed_by","")).strip();action_key=str(data.get("action_key","")).strip()
         try:
             if len(period)!=7:raise ValueError
@@ -2224,7 +2225,10 @@ class Api(BaseHTTPRequestHandler):
             serialized=json.dumps(payload,ensure_ascii=False,sort_keys=True)
             if prior:
                 if prior["payload"]!=serialized:raise ValueError("action_key is already recorded with different platform income data")
-                return self.reply(200,{**json.loads(prior["response"]),"duplicate":True})
+                replay=json.loads(prior["response"])
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"coffee.platform_income",replay["id"])
+                return self.reply(200,{**replay,"duplicate":True})
             if conn.execute("SELECT 1 FROM period_locks WHERE period=?",(period,)).fetchone():raise ValueError(f"accounting period {period} is closed")
             row=conn.execute("SELECT * FROM platform_income_reconciliations WHERE period=? AND platform=? AND store_name=?",(period,platform,store_name)).fetchone();stamp=now()
             if row:
@@ -2236,6 +2240,8 @@ class Api(BaseHTTPRequestHandler):
                     conn.execute("UPDATE platform_income_reconciliations SET gross_amount=?,refund_amount=?,subsidy_amount=?,platform_fee_amount=?,settlement_amount=?,bank_received_amount=?,declared_sales_amount=?,evidence_ref=?,note=?,updated_at=?,updated_by=? WHERE id=?",(str(amounts["gross_amount"]),str(amounts["refund_amount"]),str(amounts["subsidy_amount"]),str(amounts["platform_fee_amount"]),str(amounts["settlement_amount"]),str(optional["bank_received_amount"]) if optional["bank_received_amount"] is not None else None,str(optional["declared_sales_amount"]) if optional["declared_sales_amount"] is not None else None,evidence_ref,note,stamp,changed_by,rid))
             else:
                 rid=str(uuid4());conn.execute("INSERT INTO platform_income_reconciliations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(rid,period,platform,store_name,str(amounts["gross_amount"]),str(amounts["refund_amount"]),str(amounts["subsidy_amount"]),str(amounts["platform_fee_amount"]),str(amounts["settlement_amount"]),str(optional["bank_received_amount"]) if optional["bank_received_amount"] is not None else None,str(optional["declared_sales_amount"]) if optional["declared_sales_amount"] is not None else None,evidence_ref,note,stamp,changed_by))
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"coffee.platform_income",rid)
             response={"id":rid,"period":period,"platform":platform,"store_name":store_name}
             conn.execute("INSERT INTO platform_income_reconciliation_requests VALUES(?,?,?,?)",(action_key,serialized,json.dumps(response,ensure_ascii=False,sort_keys=True),stamp))
             return self.reply(201,response)
