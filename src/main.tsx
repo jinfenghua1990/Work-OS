@@ -429,7 +429,7 @@ function FinanceWorkspace({projects,openItems,expenses,bankRows,invoices,journal
 {section==='platform'&&<PlatformIncomeWorkspace period={currentPeriod}/>}
 {section==='journals'&&<div className="journal-workspace"><div className="panel finance-panel journal-adjustment"><div className="panel-heading"><div><h2>新增调整凭证</h2><p>仅补记/更正账务；已过账凭证不可覆盖。CNY，借贷必须相等。</p></div></div><form onSubmit={async event=>{event.preventDefault();const result=await send('/api/journals/adjustments',{...adjustment,project_code:adjustment.project_code||null,lines:adjustmentLines.map(line=>({...line,debit:line.debit||'0',credit:line.credit||'0'}))});if(result){setAdjustment({...adjustment,source_key:crypto.randomUUID(),description:''});setAdjustmentLines([{account:'',debit:'',credit:''},{account:'',debit:'',credit:''}])}}}><div className="form-split"><label>日期<input type="date" value={adjustment.posted_on} onChange={event=>setAdjustment({...adjustment,posted_on:event.target.value})} required/></label><label>凭证说明<input value={adjustment.description} onChange={event=>setAdjustment({...adjustment,description:event.target.value})} maxLength={500} required/></label></div><div className="form-split"><label>主体编码<input value={adjustment.entity_code} onChange={event=>setAdjustment({...adjustment,entity_code:event.target.value})} required/></label><label>核算维度<select value={adjustment.business_line} onChange={event=>setAdjustment({...adjustment,business_line:event.target.value})}><option value="corporate">公司</option><option value="coffee">咖啡</option><option value="bike">自行车</option><option value="exhibition">展会</option></select></label></div><label>项目编码（可选）<input value={adjustment.project_code} onChange={event=>setAdjustment({...adjustment,project_code:event.target.value})}/></label><div className="adjustment-line-head"><span>会计科目</span><span>借方 CNY</span><span>贷方 CNY</span><span></span></div>{adjustmentLines.map((line,index)=><div className="adjustment-line" key={index}><select aria-label={`第 ${index+1} 行科目`} value={line.account} onChange={event=>setAdjustmentLines(adjustmentLines.map((item,i)=>i===index?{...item,account:event.target.value}:item))}><option value="">选择科目</option>{accounts.map(account=><option key={account.account_code} value={account.account_code}>{account.account_code} · {account.account_name}</option>)}</select><input aria-label={`第 ${index+1} 行借方`} type="number" min="0" step="0.01" value={line.debit} onChange={event=>setAdjustmentLines(adjustmentLines.map((item,i)=>i===index?{...item,debit:event.target.value,credit:event.target.value?'':'0'}:item))}/><input aria-label={`第 ${index+1} 行贷方`} type="number" min="0" step="0.01" value={line.credit} onChange={event=>setAdjustmentLines(adjustmentLines.map((item,i)=>i===index?{...item,credit:event.target.value,debit:event.target.value?'':'0'}:item))}/><button type="button" className="icon-button" disabled={adjustmentLines.length<=2} onClick={()=>setAdjustmentLines(adjustmentLines.filter((_,i)=>i!==index))} aria-label="删除分录行"><X size={15}/></button></div>)}<button type="button" className="text-link" onClick={()=>setAdjustmentLines([...adjustmentLines,{account:'',debit:'',credit:''}])}>＋ 添加分录行</button><label>来源凭证键<input value={adjustment.source_key} onChange={event=>setAdjustment({...adjustment,source_key:event.target.value})} maxLength={160} required/></label><button className="primary-button" disabled={busy||!accounts.length}>{busy?'保存中…':'确认过账'}</button></form></div><div className="panel finance-panel journal-panel"><div className="panel-heading"><div><h2>会计分录</h2><p>由业务事实和经复核的调整凭证形成，按 CNY 本位币记录。</p></div><button className="secondary-button" onClick={()=>void refresh()}>刷新</button></div>{journalEntries.map(entry=><article className="journal-entry" key={entry.id}><div className="journal-entry-head"><span><strong>{entry.posted_on} · {entry.source_type}</strong><small>{entry.memo||entry.business_line+' / '+entry.entity_code} · {entry.source_id}</small></span><span>借 {entry.currency} {entry.debit_total} / 贷 {entry.currency} {entry.credit_total}</span></div><div className="journal-lines">{entry.lines.map((line,index)=><div className="journal-line" key={index}><span>{line.account}</span><span>{Number(line.debit)?line.debit:'—'}</span><span>{Number(line.credit)?line.credit:'—'}</span></div>)}</div></article>)}{!journalEntries.length&&<div className="empty-state"><FileCheck2 size={22}/><strong>暂无会计分录</strong><span>业务凭证会在过账后显示在此处。</span></div>}</div></div>}
 {section==='reports'&&<OperatingReportView report={operatingReport} period={currentPeriod} send={send}/>}
-{section==='invoices'&&<div className="invoice-layout"><div className="panel finance-panel"><div className="panel-heading"><div><h2>发票台账</h2><p>内部认领与税务用途/认证状态分开维护。</p></div></div>{invoices.map(invoice=><InvoiceCard key={invoice.id} invoice={invoice} openItems={openItems} send={send} refresh={refresh}/>)}{!invoices.length&&<div className="empty-state"><FileCheck2 size={22}/><strong>暂无发票</strong></div>}</div><InvoiceForm send={send}/></div>}</section>
+{section==='invoices'&&<><EvidenceArchivePanel/><div className="invoice-layout"><div className="panel finance-panel"><div className="panel-heading"><div><h2>发票台账</h2><p>内部认领与税务用途/认证状态分开维护。</p></div></div>{invoices.map(invoice=><InvoiceCard key={invoice.id} invoice={invoice} openItems={openItems} send={send} refresh={refresh}/>)}{!invoices.length&&<div className="empty-state"><FileCheck2 size={22}/><strong>暂无发票</strong></div>}</div><InvoiceForm send={send}/></div></>}</section>
 }
 const expenseCategoryLabels:Record<string,string>={marketing:'市场推广',rent:'租赁',logistics:'物流仓储',software:'软件服务',travel:'差旅',utilities:'水电通信',professional_services:'专业服务',booth_rental:'展位租赁',event_fee:'展会服务费',sample_cost:'样品费用',decoration:'展位搭建',accommodation:'住宿',other:'其他'}
 function trialBalanceAccountLabel(account:string){if(account.startsWith('operating_expense:'))return `经营费用 · ${expenseCategoryLabels[account.split(':',2)[1]]||account.split(':',2)[1]}`;const labels:Record<string,string>={bank:'银行存款（已过账分配）',accounts_receivable:'应收账款',accounts_payable:'应付账款',inventory:'存货', 'inventory:bike':'自行车存货',supplier_advances:'供应商预付款',unclassified_receipts:'待分类收款',unclassified_payments:'待分类付款',sales_revenue:'销售收入',cost_of_goods_sold:'主营业务成本',realized_fx_gain:'已实现汇兑收益',realized_fx_loss:'已实现汇兑损失'};return labels[account]||account}
@@ -512,7 +512,88 @@ function BankImportPanel({send}:{send:(path:string,payload:unknown)=>Promise<unk
 }
 
 function InvoiceCard({invoice,openItems,send,refresh}:{invoice:InvoiceRow;openItems:OpenItem[];send:(path:string,payload:unknown)=>Promise<unknown>;refresh:()=>Promise<void>}){const [ref,setRef]=useState(invoice.tax_evidence_ref||'');const [status,setStatus]=useState(invoice.tax_status);const [targetId,setTargetId]=useState('');const [linkAmount,setLinkAmount]=useState('');const [error,setError]=useState('');async function save(){const r=await fetch('/api/invoices/tax-status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({invoice_id:invoice.id,tax_status:status,tax_evidence_ref:ref})});if(r.ok)await refresh();else{const d=await r.json();setError(d.error||'保存失败')}}const targets=openItems.filter(x=>x.direction===(invoice.direction==='sales'?'receivable':'payable')&&x.counterparty===invoice.counterparty&&x.currency===invoice.currency&&Number(x.original_amount)>Number(x.settled_amount));async function link(){if(!targetId||!linkAmount)return;const out=await send('/api/invoices/link',{invoice_id:invoice.id,target_type:invoice.direction==='sales'?'receivable':'payable',target_id:targetId,amount:linkAmount});if(out){setLinkAmount('');setTargetId('')}}return <div className="invoice-card"><div><strong>{invoice.invoice_number} · {invoice.counterparty}</strong><small>{invoice.direction==='purchase'?'进项':'销项'} · {invoice.issued_on} · {invoice.currency} {invoice.total_amount}（税额 {invoice.tax_amount}） · 汇率 {invoice.exchange_rate} / {invoice.rate_date}</small><small>内部登记不代表抵扣；已关联 {invoice.currency} {invoice.linked_amount} / {invoice.total_amount}；税务状态：{status}{ref?` · 依据 ${ref}`:''}</small>{targets.length>0&&Number(invoice.linked_amount)<Number(invoice.total_amount)&&<div className="invoice-link-controls"><select value={targetId} onChange={e=>setTargetId(e.target.value)}><option value="">选择同币种同往来单位单据</option>{targets.map(x=><option key={x.id} value={x.id}>{x.direction==='receivable'?'应收':'应付'} · {x.source_type} · 尚欠 {(Number(x.original_amount)-Number(x.settled_amount)).toFixed(2)} {x.currency}</option>)}</select><input value={linkAmount} onChange={e=>setLinkAmount(e.target.value)} inputMode="decimal" placeholder="关联金额"/><button className="secondary-button" disabled={!targetId||!linkAmount} onClick={()=>void link()}>内部关联</button></div>}</div><select value={status} onChange={e=>setStatus(e.target.value)}><option value="pending">待核实</option><option value="eligible">符合抵扣条件</option><option value="certified_deductible">已认证可抵扣（人工确认）</option><option value="non_deductible">不得抵扣</option><option value="void">已作废</option></select><input value={ref} onChange={e=>setRef(e.target.value)} placeholder="税务确认依据编号（可选）"/><button className="secondary-button" onClick={()=>void save()}>保存状态</button>{error&&<small className="form-error">{error}</small>}</div>}
-function InvoiceForm({send}:{send:(path:string,payload:unknown)=>Promise<unknown>}){const [error,setError]=useState('');async function submit(e:React.FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);const d=Object.fromEntries(f.entries());const r=await send('/api/invoices',{...d,total_amount:d.total_amount,tax_amount:d.tax_amount||'0'});if(r)e.currentTarget.reset()}return <form className="panel invoice-form" onSubmit={e=>void submit(e)}><h2>登记发票</h2><p>只保存凭证事实，不自动确认税额或损益。</p><label>发票号码<input name="invoice_number" required/></label><label>方向<select name="direction"><option value="purchase">进项发票</option><option value="sales">销项发票</option></select></label><label>往来单位<input name="counterparty" required/></label><label>开票日期<input type="date" name="issued_on" required/></label><div className="form-split"><label>价税合计<input name="total_amount" inputMode="decimal" required/></label><label>税额<input name="tax_amount" inputMode="decimal" defaultValue="0" required/></label></div><div className="form-split"><label>币种<input name="currency" defaultValue="CNY" required/></label><label>记账汇率<input name="exchange_rate" inputMode="decimal" defaultValue="1" required/></label></div><label>汇率日期<input type="date" name="rate_date" required/></label><label>来源凭证键<input name="source_key" required placeholder="文件名:行号 / 发票唯一键"/></label><button className="primary-button">登记发票</button></form>}
+type ArchivedEvidenceRow={id:string;sha256:string;size_bytes:number;original_name:string;category:string;period:string;created_at:string}
+function EvidenceArchivePanel(){
+  const [rows,setRows]=useState<ArchivedEvidenceRow[]>([]);
+  const [sourceFile,setSourceFile]=useState<File|null>(null);
+  const [period,setPeriod]=useState(new Date().toISOString().slice(0,7));
+  const [category,setCategory]=useState('input_invoice');
+  const [sourceSystem,setSourceSystem]=useState('');
+  const [sourceId,setSourceId]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [status,setStatus]=useState('');
+  async function load(){const r=await fetch('/api/archive/files');if(!r.ok)throw new Error('原始档案列表读取失败');setRows(await r.json() as ArchivedEvidenceRow[])}
+  useEffect(()=>{void load().catch(e=>setStatus(e instanceof Error?e.message:'档案暂不可用'))},[]);
+  async function upload(e:React.FormEvent<HTMLFormElement>){
+    e.preventDefault();if(!sourceFile)return;setBusy(true);setStatus('');
+    try{
+      const result=await archiveOriginal(sourceFile,category,period,'work-os');
+      if(sourceSystem.trim()&&sourceId.trim()){
+        const response=await fetch('/api/archive/links',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({file_id:result.id,source_system:sourceSystem.trim(),source_document_id:sourceId.trim()})});
+        const linked=await response.json();
+        if(!response.ok)throw new Error(linked.error||'原件已保存，但关联业务单失败');
+      }
+      setStatus('原始凭证已保存，SHA-256：'+result.id.slice(0,12)+'…');
+      await load();
+    }catch(e){setStatus(e instanceof Error?e.message:'原件归档失败')}finally{setBusy(false)}
+  }
+  return <div className="panel finance-panel">
+    <div className="panel-heading"><div><h2>统一原始凭证档案</h2><p>银行、进销项、采购、销售原件集中保存；与发票认领、税务认证分别处理。</p></div><strong>{rows.length} 条档案记录</strong></div>
+    <form onSubmit={e=>void upload(e)} className="form-split">
+      <label>选择文件<input type="file" accept=".csv,.xls,.xlsx,.pdf,.ofd,.xml,.zip,.txt" required onChange={e=>setSourceFile(e.target.files?.[0]||null)}/></label>
+      <label>凭证类别<select value={category} onChange={e=>setCategory(e.target.value)}>
+        <option value="bank">银行流水</option><option value="input_invoice">进项发票</option><option value="output_invoice">销项发票</option><option value="sales">销售订单</option><option value="purchase">采购订单</option><option value="expense">经营费用</option><option value="contract">合同</option><option value="other">其他</option>
+      </select></label>
+      <label>所属月份<input type="month" value={period} onChange={e=>setPeriod(e.target.value)} required/></label>
+      <label>业务系统（可选）<input value={sourceSystem} onChange={e=>setSourceSystem(e.target.value)} placeholder="coffee.purchase"/></label>
+      <label>单据 ID（可选）<input value={sourceId} onChange={e=>setSourceId(e.target.value)} placeholder="已有业务单 ID"/></label>
+      <button className="primary-button" disabled={busy||!sourceFile}>{busy?'保存中…':'保存原始凭证'}</button>
+    </form>
+    {status&&<p>{status}</p>}
+    <div className="data-table">
+      <div className="data-head"><span>原件</span><span>类别</span><span>月份</span><span>大小</span><span>操作</span></div>
+      {rows.slice(0,30).map(row=><div className="data-row" key={row.id+row.original_name+row.created_at}>
+        <span><strong>{row.original_name}</strong><small>SHA-256 {row.sha256.slice(0,14)}…</small></span>
+        <span>{row.category}</span><span>{row.period}</span><span>{(row.size_bytes/1024).toFixed(1)} KB</span>
+        <a href={`/api/archive/files/${row.id}/download`} className="text-link">下载原件</a>
+      </div>)}
+      {!rows.length&&<div className="empty-state">暂无原始凭证记录</div>}
+    </div>
+    <p>本功能仅在本机 API 使用。完整身份权限、NAS 备份、云端 WORM 保管及电子会计档案合规验收尚未完成。</p>
+  </div>
+}
+
+function InvoiceForm({send}:{send:(path:string,payload:unknown)=>Promise<unknown>}){
+  const [error,setError]=useState('');
+  const [file,setFile]=useState<File|null>(null);
+  const [busy,setBusy]=useState(false);
+  async function submit(e:React.FormEvent<HTMLFormElement>){
+    e.preventDefault();const form=e.currentTarget;const f=new FormData(form);const d=Object.fromEntries(f.entries());
+    setError('');setBusy(true);
+    try{
+      if(!file)throw new Error('请上传电子发票原件，归档成功后才能登记新发票');
+      const period=String(d.issued_on).slice(0,7);
+      const evidence=await archiveOriginal(file,d.direction==='purchase'?'input_invoice':'output_invoice',period,'finance.invoice');
+      const result=await send('/api/invoices',{...d,archive_file_id:evidence.id,total_amount:d.total_amount,tax_amount:d.tax_amount||'0'});
+      if(result){form.reset();setFile(null)}else setError('发票原件已留存，但发票信息未登记，请核对后台错误')
+    }catch(e){setError(e instanceof Error?e.message:'发票归档或登记失败')}finally{setBusy(false)}
+  }
+  return <form className="panel invoice-form" onSubmit={e=>void submit(e)}>
+    <h2>登记进销项发票</h2><p>先保存原件，再记录发票；内部认领不等于税局抵扣确认。</p>
+    <label>电子发票原件<input type="file" accept=".pdf,.ofd,.xml" required onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
+    <label>发票号码<input name="invoice_number" required/></label>
+    <label>方向<select name="direction"><option value="purchase">进项发票</option><option value="sales">销项发票</option></select></label>
+    <label>往来单位<input name="counterparty" required/></label>
+    <label>开票日期<input type="date" name="issued_on" required/></label>
+    <div className="form-split"><label>价税合计<input name="total_amount" inputMode="decimal" required/></label><label>税额<input name="tax_amount" inputMode="decimal" defaultValue="0" required/></label></div>
+    <div className="form-split"><label>币种<input name="currency" defaultValue="CNY" required/></label><label>记账汇率<input name="exchange_rate" inputMode="decimal" defaultValue="1" required/></label></div>
+    <label>汇率日期<input type="date" name="rate_date" required/></label>
+    <label>来源凭证键<input name="source_key" required placeholder="开票方税号 + 发票号码等稳定标识"/></label>
+    {error&&<p className="form-error">{error}</p>}
+    <button className="primary-button" disabled={busy}>{busy?'归档并登记中…':'归档并登记发票'}</button>
+  </form>
+}
 
 type CsvRow = Record<string,string>
 type ImportResult = {source_row_key:string;status:'posted'|'duplicate'|'rejected';message:string}
