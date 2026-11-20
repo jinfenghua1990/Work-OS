@@ -1528,7 +1528,7 @@ class Api(BaseHTTPRequestHandler):
                 rows = conn.execute("SELECT * FROM inventory_movements ORDER BY created_at DESC,id DESC LIMIT 500").fetchall()
                 return self.reply(200, [dict(row) for row in rows])
             if path == "/api/journals":
-                rows = conn.execute("SELECT e.id,e.source_type,e.source_id,e.posted_on,e.created_at,e.business_line,e.entity_code,e.project_code,e.currency,e.memo,l.account,l.debit,l.credit,l.business_line AS line_business_line,l.entity_code AS line_entity_code,l.project_code AS line_project_code FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id ORDER BY e.posted_on DESC,e.created_at DESC,l.rowid LIMIT 1200").fetchall()
+                rows = conn.execute("SELECT e.id,e.source_type,e.source_id,e.posted_on,e.created_at,e.business_line,e.entity_code,e.project_code,e.currency,e.memo,l.account,l.debit,l.credit,l.business_line AS line_business_line,l.entity_code AS line_entity_code,l.project_code AS line_project_code FROM journal_entries e JOIN journal_lines l ON l.entry_id=e.id ORDER BY e.posted_on DESC,e.created_at DESC,l.id LIMIT 1200").fetchall()
                 entries = {}
                 for row in rows:
                     entry = entries.setdefault(row["id"], {"id":row["id"],"source_type":row["source_type"],"source_id":row["source_id"],"posted_on":row["posted_on"],"created_at":row["created_at"],"business_line":row["business_line"],"entity_code":row["entity_code"],"project_code":row["project_code"],"currency":row["currency"],"memo":row["memo"],"lines":[],"debit_total":Decimal(0),"credit_total":Decimal(0)})
