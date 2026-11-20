@@ -17,6 +17,7 @@ from urllib.parse import unquote
 import original_archive
 import local_auth
 import xlsx_reader
+import exhibition_assets
 from coffee_stock_cover import stock_cover
 
 from coffee_source_identity import normalize_sale_source
@@ -48,7 +49,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 38
+LATEST_SCHEMA_VERSION = 39
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -62,6 +63,7 @@ CHART_OF_ACCOUNTS = {
     "accounts_receivable": ("应收账款", "asset", "debit", "balance"),
     "inventory": ("存货", "asset", "debit", "balance"),
     "inventory:bike": ("自行车存货", "asset", "debit", "balance"),
+    "inventory:exhibition": ("展会在外样品", "asset", "debit", "balance"),
     "supplier_advances": ("供应商预付款", "asset", "debit", "balance"),
     "unclassified_payments": ("待分类付款", "suspense", "debit", "balance"),
     "unclassified_receipts": ("待分类收款", "suspense", "credit", "balance"),
@@ -278,6 +280,13 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version)==38:
+                    conn.execute("BEGIN")
+                    exhibition_assets.migrate(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version) in (36,37):
                     conn.execute("BEGIN")
                     if int(version)==36:
@@ -285,6 +294,8 @@ def init_db() -> None:
                         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
                     ensure_tax_history_period_columns(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
+                    exhibition_assets.migrate(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -312,6 +323,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
                     ensure_tax_history_period_columns(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
+                    exhibition_assets.migrate(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -839,6 +852,8 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
         ensure_tax_history_period_columns(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
+        exhibition_assets.migrate(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
