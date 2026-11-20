@@ -12,6 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
+from urllib.parse import unquote
+
+import original_archive
 
 from coffee_source_identity import normalize_sale_source
 
@@ -42,7 +45,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 36
+LATEST_SCHEMA_VERSION = 37
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -254,6 +257,13 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version) == 36:
+                    conn.execute("BEGIN")
+                    original_archive.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version) in (32,33,34,35):
                     conn.execute("BEGIN")
                     if int(version)==32:
@@ -274,6 +284,8 @@ def init_db() -> None:
                     conn.execute("UPDATE stock_layers SET currency=COALESCE((SELECT currency FROM purchases WHERE purchases.id=stock_layers.purchase_id),currency)")
                     conn.execute("UPDATE stock_layers SET exchange_rate=COALESCE((SELECT exchange_rate FROM purchases WHERE purchases.id=stock_layers.purchase_id),exchange_rate)")
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(36,?)", (datetime.now(timezone.utc).isoformat(),))
+                    original_archive.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -797,6 +809,8 @@ def init_db() -> None:
             if column not in layer_columns:conn.execute(f"ALTER TABLE stock_layers ADD COLUMN {column} {declaration}")
         conn.execute("UPDATE stock_layers SET currency=COALESCE((SELECT currency FROM purchases WHERE purchases.id=stock_layers.purchase_id),currency)")
         conn.execute("UPDATE stock_layers SET exchange_rate=COALESCE((SELECT exchange_rate FROM purchases WHERE purchases.id=stock_layers.purchase_id),exchange_rate)")
+        original_archive.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1024,6 +1038,45 @@ class Api(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
         with db() as conn:
+            if path == "/api/archive/files":
+                rows=conn.execute(
+                    "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
+                    "FROM archive_files f JOIN archive_uploads u ON u.file_id=f.id "
+                    "ORDER BY u.uploaded_at DESC LIMIT 500"
+                ).fetchall()
+                return self.reply(200,[dict(row) for row in rows])
+            if path == "/api/archive/links":
+                source=parse_qs(parsed.query).get("source_system",[""])[0]
+                source_id=parse_qs(parsed.query).get("source_document_id",[""])[0]
+                if not source or not source_id:
+                    return self.reply(422,{"error":"source_system and source_document_id required"})
+                rows=conn.execute(
+                    "SELECT l.file_id,l.linked_at,f.size_bytes,u.original_name "
+                    "FROM archive_links l JOIN archive_files f ON f.id=l.file_id "
+                    "JOIN archive_uploads u ON u.file_id=f.id "
+                    "WHERE l.source_system=? AND l.source_document_id=? "
+                    "GROUP BY l.file_id,l.linked_at,f.size_bytes,u.original_name",
+                    (source,source_id)).fetchall()
+                return self.reply(200,[dict(row) for row in rows])
+            if path.startswith("/api/archive/files/") and path.endswith("/download"):
+                file_id=path.split("/")[4]
+                metadata=original_archive.fetch_file_metadata(conn,file_id)
+                if not metadata: return self.reply(404,{"error":"archive file not found"})
+                try:
+                    archive_path=original_archive.open_verified_file(file_id, metadata["storage_key"])
+                except (ValueError,OSError) as exc:
+                    return self.reply(422,{"error":str(exc)})
+                self.send_response(200)
+                self.send_header("Content-Type","application/octet-stream")
+                self.send_header("Content-Disposition",original_archive.download_disposition(metadata["original_name"]))
+                self.send_header("Content-Length",str(metadata["size_bytes"]))
+                self.send_header("Cache-Control","no-store")
+                self.send_header("X-Content-Type-Options","nosniff")
+                self.end_headers()
+                with archive_path.open("rb") as original:
+                    while chunk:=original.read(1024*1024):
+                        self.wfile.write(chunk)
+                return
             if path == "/api/accounts":
                 rows=conn.execute("SELECT account_code,account_name,account_type,normal_side,statement,active FROM chart_of_accounts ORDER BY account_code").fetchall()
                 return self.reply(200,[dict(row) for row in rows])
@@ -1414,7 +1467,16 @@ class Api(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         try:
+            if path == "/api/archive/files":
+                return self.upload_original_document()
             data = self.body()
+            if path == "/api/archive/links":
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    result=original_archive.link_document(
+                        conn,str(data.get("file_id","")),str(data.get("source_system","")),
+                        str(data.get("source_document_id","")))
+                return self.reply(200 if result["duplicate"] else 201,result)
             if path == "/api/purchases":
                 return self.create_purchase(data)
             if path.startswith("/api/purchases/") and path.endswith("/receive"):
@@ -1500,6 +1562,23 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(409, {"error": str(exc)})
         except DB_ERRORS as exc:
             return self.reply(500, {"error": "database error", "detail": str(exc)})
+
+    def upload_original_document(self) -> None:
+        # Binary streaming rather than JSON/base64 avoids blowing up memory for
+        # the larger monthly source files. Only safe on a loopback-only API.
+        raw_length=self.headers.get("Content-Length","")
+        if not raw_length.isdigit():
+            raise ValueError("Content-Length must be a positive integer")
+        length=int(raw_length)
+        filename=unquote(self.headers.get("X-File-Name",""))
+        category=self.headers.get("X-Document-Category","")
+        period=self.headers.get("X-Document-Period","")
+        source_system=self.headers.get("X-Source-System","")
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=original_archive.ingest(
+                conn,self.rfile,length,filename,category,period,source_system)
+        return self.reply(201,result)
 
     def import_opening_balances(self, data: dict) -> None:
         as_of=str(data.get("as_of",""))
