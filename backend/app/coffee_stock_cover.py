@@ -33,10 +33,12 @@ def stock_cover(conn, today: date | None = None) -> dict:
     for row in conn.execute("SELECT sku,item_type FROM purchases ORDER BY created_at"):
         sku_types[row["sku"]] = row["item_type"]
 
+    on_hand_by_sku = {row["sku"]: int(row["quantity"]) for row in balances}
+    # Include zero-stock SKUs, otherwise a sold-out item disappears from alerts.
+    all_skus = sorted(set(on_hand_by_sku) | set(net_sales) | set(thresholds) | set(sku_types))
     items = []
-    for row in balances:
-        sku = row["sku"]
-        on_hand = int(row["quantity"])
+    for sku in all_skus:
+        on_hand = on_hand_by_sku.get(sku, 0)
         last_30 = net_sales.get(sku, 0)
         threshold = thresholds.get(sku)
         daily = (Decimal(last_30) / Decimal(30)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
