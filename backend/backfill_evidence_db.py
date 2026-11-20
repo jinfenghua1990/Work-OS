@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "app"))
 import evidence_db
+import r2_evidence
 import original_archive
 import server
 
@@ -45,17 +46,20 @@ def migrate(apply: bool = False) -> dict:
         candidates=[]
         for row in records:
             file_id=row["id"]
+            in_r2 = r2_evidence.location(conn,file_id) if r2_evidence.mode(conn)=="r2" else None
             existing=conn.execute(
                 f"SELECT sha256 FROM {evidence_db._table(conn,'original_documents')} WHERE sha256=?",
                 (file_id,),
             ).fetchone()
-            if existing:
+            if in_r2 or (existing and r2_evidence.mode(conn)!="r2"):
                 already+=1
             path=original_archive.archive_root() / row["storage_key"]
             if not path.is_file():
                 # If the database already has the exact original, recover
                 # from it instead of guessing the bytes from business tables.
                 binary=evidence_db.fetch(conn,file_id) if existing else None
+                if binary is None and in_r2:
+                    binary=r2_evidence.fetch(conn,file_id)
                 if binary is None:
                     missing.append(file_id)
                     continue
@@ -76,7 +80,8 @@ def migrate(apply: bool = False) -> dict:
             # existing original files are never modified or deleted.
             conn.execute("BEGIN IMMEDIATE")
             for row,binary in candidates:
-                evidence_db.store(
+                persist=r2_evidence.store if r2_evidence.mode(conn)=="r2" else evidence_db.store
+                persist(
                     conn,row["id"],binary,row["upload_id"],
                     row["original_name"],row["category"],row["period"],row["source_system"]
                 )

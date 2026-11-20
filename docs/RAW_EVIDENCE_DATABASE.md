@@ -1,66 +1,92 @@
-# Work OS 原始凭证独立数据库归档（schema 41）
+# Work OS 原始凭证 R2 存储（V42）
 
-## 最终存储方式
+## 已确定架构
 
-业务只用一个 PostgreSQL 数据库，但**原始档案与计算后的业务账严格分区**：
-
-| 数据区域 | 内容 | 原则 |
+| 存储位置 | 内容 | 用途 |
 |---|---|---|
-| `public.*` | 银行流水、采购销售、发票、库存、会计凭证、关联号 | 可按业务规则生成、核销、更正；旧账仍受关账约束 |
-| `evidence.original_documents` | **完整的原始文件二进制**（BYTEA）+ 文件 SHA-256 + 大小 | 以第一次上传的原始字节为准，禁止 UPDATE / DELETE |
-| `evidence.row_snapshots` | 首次按解析器版本得到的原始行二维数组，原始字段文本，不作会计字段换算 | 只读且不可覆盖，未来重解析另存新版本 |
-| `evidence.import_batches` | 每次上传批次、原文件名、类型、月份、来源系统 | 同一文件改名重传仍有独立上传记录 |
-| 本地/NAS 原始档案目录 | 内容哈希路径下的第二份文件 | 与 SQL 原件内容完全一致，必须另做独立备份 |
+| Neon PostgreSQL public | 业务单、银行流水、发票、归档索引、SHA-256、上传批次 | 唯一业务数据源 |
+| Neon PostgreSQL evidence | 原始行快照、来源字段、不可变 R2 定位信息 | 可核验追溯，不依赖业务解析结果 |
+| Cloudflare R2（私有 Bucket） | Excel、PDF、CSV、XML、OFD、ZIP 等完整原文件字节 | 新上传原件的云端主存储 |
+| 本地/NAS | 每份原始文件的独立副本 | 备份及灾难恢复 |
 
-SQLite 离线版使用 `evidence_original_documents` 等同义表，不额外拆成第二个数据库。正式 PostgreSQL 采用独立 `evidence` schema，业务入账和原件索引可以在**同一个数据库事务**处理，避免跨数据库双写不一致。
+V41 已有的 BYTEA 原件不删除、不覆盖，仍可读取。V42 新文件在 \`evidence.original_documents\` 保留 SHA-256、大小和时间等元数据，\`exact_bytes\` 为 NULL，实际字节写入私有 R2 Bucket；\`evidence.r2_locations\` 保留不可覆盖的定位信息。原始行、上传批次仍保留在原有 \`evidence.row_snapshots\`、\`evidence.import_batches\`，避免破坏原来的业务与追溯引用。
 
-## 哪些数据保证不变
+**不使用 Neon 对象存储。** 这里的 R2 指 **Cloudflare R2**，不是 Neon Storage。
 
-- PDF / OFD / XML / XLSX / CSV / XLS / ZIP 等，保存完整原文件字节，**包括原有的排版、编码、签章及未识别内容**；不能靠解析后的行来代替。
-- Excel/CSV 可解析时，另记第一工作表或 CSV 所有源行的值快照；不推断税率、销售额、汇率、库存成本，不修改订单号前导零。
-- PDF/OFD/加密或无法识别的文件即使**不解析**，原始二进制文件仍完整保存在数据库；解析状态单独标识为 `binary_only` 或 `unparsed`。
-- 文件 SHA-256 定位全局唯一原件；同内容多次上传只保存一份原件，所有上传批次保留，变更后的版本得到新的 SHA-256。
-- 下载优先读取数据库中经过 SHA-256 验证的原文件；即使 NAS 镜像丢失，已入库且完整的原件仍可下载。
-- 原始文件、原始行和上传批次设置防 UPDATE/DELETE 触发器。需要修正业务记录时形成更正数据，**不能修改原件**。
+## 安全逻辑
 
-**注意：** PostgreSQL 表级触发器仍不能代替法定 WORM 或独立不可篡改存证，数据库所有者和超级管理员仍可绕过。Excel 第一表快照是解析结果，不代表保留了全部单元格格式；需核验原貌时必须下载完整 XLSX 原件。
+- R2 路径固定为 \`work-os/originals/前2位/后2位/sha256\`，不使用用户文件名作为对象路径；
+- 写入使用 S3 API \`IfNoneMatch="*"\`，同内容文件重传不覆盖既有对象；不同原件生成新 SHA；
+- 上传后实际 GET 回原文件字节，验证完整 SHA-256 和大小，再允许数据库事务提交；
+- 下载通过后端鉴权读取 R2，并再次校验 SHA-256；不公开 R2 对象 URL；
+- R2 无法访问、哈希异常、未配置密钥时，上传失败，不会伪造“原件已保存”或入账成功；
+- NAS 副本在本地归档根目录保存，通过哈希验证；**NAS 必须单独备份、设置权限**；
+- \`evidence.r2_locations\` 由数据库 UPDATE/DELETE 触发器保护。管理员仍有可能绕过，不能当作满足法规要求的 WORM 保管证明。
 
-## 当前 Neon 实际情况
+## 配置
 
-已只读核对：
+仅在本机或部署环境的 **私有环境变量** 中设置（不要提交密钥到 GitHub）：
 
-- 项目 `work-os`，区域新加坡，PostgreSQL 18，实际数据库名 `neondb`。
-- `production` 默认分支没有 Work OS 业务表，不能直接接正式财务系统。
-- `work-os-local-dev` 测试分支旧结构为 v35，银行、采购、销售、发票、凭证这些表主要记录数为 0。
-- 本次代码迁移目标为 **v41**，不代表已经将真实 Neon 分支迁移到 v41。
-- **源分支上没有可从数据库还原的历史原始文件**。旧 CoffeeBear 文件必须从实际 NAS/历史上传目录/旧存储找回，并验证 SHA-256，不能用当前财务报表中的金额拼造原始单据。
+\`\`\`env
+WORKOS_DB_BACKEND=postgres
+WORKOS_DATABASE_URL=postgresql://...
+WORKOS_EVIDENCE_STORAGE=r2
+WORKOS_R2_ACCOUNT_ID=your_32_hex_cloudflare_account_id
+WORKOS_R2_BUCKET=work-os-originals
+WORKOS_R2_ACCESS_KEY_ID=your_r2_access_key_id
+WORKOS_R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
+WORKOS_ARCHIVE_ROOT=/path/to/nas-or-local-archive
+\`\`\`
 
-## 存量档案复制
+需在 Cloudflare 手工创建 **私有 R2 Bucket** 并为其发放最小权限凭证。数据库连接字符串和 R2 密钥不要发给聊天、写入仓库或提交日志。
 
-1. 在本地确认数据库和原件目录都已经独立备份。
-2. 本地先运行 `python backend/backfill_evidence_db.py`：仅检查旧 `archive_files/archive_uploads` 与磁盘原件，核对 SHA-256，不修改任何账务。
-3. 当前结构已安全升级为 v41 且原件无遗漏后，可显式运行：
-   ```bash
-   WORKOS_EVIDENCE_BACKFILL_ALLOW=1 python backend/backfill_evidence_db.py --apply
-   ```
-   Windows PowerShell 设置环境变量请采用 `$env:WORKOS_EVIDENCE_BACKFILL_ALLOW='1'`。
-4. 复制完成后，在财务中心原始凭证档案查看「数据库原件已保存」，点击「查看原始行」可只读查看；财务中心档案核验会分别提示数据库和 NAS 镜像缺失/损坏。
+安装依赖：\`python -m pip install -r backend/requirements.txt\`。
 
-工具只复制已验证文件字节，不更改采购、销售、银行、发票或会计凭证内容。若发现缺件、哈希异常或容量超限，整个复制操作报错，不会假装成功。
+PostgreSQL 默认采用 R2 模式（未配置凭据时拒绝上传）；本地 SQLite 默认保留原 BYTEA/BLOB 归档模式供离线测试。可通过 \`WORKOS_EVIDENCE_STORAGE=database\` 显式使用 PostgreSQL V41 兼容模式，但这会继续占用 Neon 数据库存储，不推荐长期使用。
 
-## 容量与免费方案
+## 版本
 
-**原始文件每月约 1GB 时，免费 Neon 不适合承担无限增长的文件二进制主档。** 存入 PostgreSQL 的完整字节直接消耗数据库存储，另有索引、行快照和上传记录开销。
+- Neon 测试库和正式库之前已初始化 V41。
+- 本改造目标版本 **V42**；需在隔离副本与回归测试通过后再执行实际迁移。
+- 新增 R2 定位表，旧 SQL 原件 \`exact_bytes\` 变为可空；**旧原件保持不变**。
+- 不复制旧库业务金额、不修改会计凭证，不制造不存在的历史原文件。
 
-当前为了避免在免费云项目中悄悄用满空间，PostgreSQL 原件字节容量默认限制为 **256 MiB**，可通过 `WORKOS_EVIDENCE_DB_MAX_BYTES` 调整，但提高前必须核对实际剩余额度；超限时返回明确失败，**不会继续业务入账**。本地 SQLite 默认上限 8 GiB，可自行按磁盘容量配置。
+## CoffeeBear 历史凭证导入
 
-长期免费且持续增长的方案应由 NAS 保存所有原件，云端数据库仅保留校验哈希、批次与业务关联；但这与「所有原件字节均入云数据库」是两种不同的存储策略，不能混同。本轮严格按你的要求提供完整字节入数据库的能力，并明确免费容量限制。
+旧 CoffeeBear Neon 数据库只有部分文件索引，真实文件在旧 Mac / NAS 路径；仅靠旧库中的银行交易、发票金额无法重建原始 Excel、PDF。
 
-## 未完成
+\`backend/import_coffeebear_originals.py\` 默认 **只读检查**。需在能访问旧路径的 Mac / NAS 本机运行：
 
-- Neon 生产分支初始化与真实结构 v35→v41 的线上迁移、备份/恢复演练；
-- CoffeeBear 历史原件位置确认、原始文件实际复制和历史销售对账；
-- 完整会计电子档案合规存储（WORM、审计权限、定期核验、灾难恢复）；
-- 公网/多用户认证与正式跨系统 API 上线。
+\`\`\`bash
+COFFEEBEAR_DATABASE_URL='postgresql://read-only-user:...' \
+python backend/import_coffeebear_originals.py \
+  --map-path '/Users/gino/ecommerce-workspace-data/production=/Volumes/NAS/production' \
+  --map-path '/data=/Volumes/NAS/data'
+\`\`\`
 
-未验收以上事项前，不得声明全部数据库和经营财务系统已经正式上线。
+只有全部源文件可读取、实际大小及 SHA-256 校验通过，且 Work OS 正式库及 R2 配好之后，才可显式执行：
+
+\`\`\`bash
+WORKOS_COFFEEBEAR_IMPORT_ALLOW=1 \
+python backend/import_coffeebear_originals.py --apply \
+  --map-path '/Users/gino/ecommerce-workspace-data/production=/Volumes/NAS/production' \
+  --map-path '/data=/Volumes/NAS/data'
+\`\`\`
+
+命令中的 NAS 路径仅为示例，必须换成**实际挂载位置**。每个旧上传记录通过 \`archive_links\` 保留源类型与旧 ID，重复执行时跳过已关联记录。导入只归档原件，**不自动创建任何会计分录或改写业务账**。若未找到历史原件，脚本拒绝部分导入并输出缺失项。
+
+另有 \`backend/backfill_evidence_db.py\` 用于处理此前已有 Work OS \`archive_files\` 元数据的本地原件，V42 的 R2 模式下会优先补录 R2。
+
+## 费用与限制
+
+R2 对象容量、请求量、网络费用以用户 Cloudflare 账单及当期官方定价为准。已有 Neon 免费数据库容量保护（V41 BYTEA 默认 256 MiB）仅适用于兼容的 SQL 字节存储，不再限制 V42 的 R2 新原件。不过数据库原始行快照及索引仍占用 Neon 存储。
+
+本次代码改造**不能代表真实 R2 已连通**：没有 Cloudflare Bucket 和私有访问密钥就无法验证真实上传。CoffeeBear 历史原件的实际复制也依赖 Mac/NAS 上存在相应原始文件。
+
+## 上线验收
+
+1. 本地与 CI 测试通过，隔离 Neon 结构从 V41 升至 V42，核对旧文件可读；
+2. 在用户的私有 Bucket 中，用**真实**测试文件验证上传 / 回读 / 重复上传 / 删除保护；
+3. 核对 NAS 独立镜像、R2 访问权限和恢复方法；
+4. 用 CoffeeBear 真实文件运行只读清点，再迁移，核对总数量、上传批次及 SHA-256；
+5. 验证业务使用中的登录鉴权与财务入账逻辑，方可宣布上线完成。

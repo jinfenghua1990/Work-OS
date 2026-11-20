@@ -178,6 +178,8 @@ def store(
         (file_id,),
     ).fetchone()
     if existing:
+        if existing["exact_bytes"] is None:
+            raise ValueError("original already stored in R2; database bytes not available")
         old_bytes = bytes(existing["exact_bytes"])
         if len(old_bytes) != len(exact_bytes) or old_bytes != exact_bytes:
             raise ValueError("original evidence identity collision or stored bytes changed")
@@ -237,6 +239,8 @@ def fetch(conn, file_id: str) -> bytes | None:
     ).fetchone()
     if not row:
         return None
+    if row["exact_bytes"] is None:
+        return None  # R2-backed V42 records contain metadata, not BYTEA originals.
     data = bytes(row["exact_bytes"])
     if len(data) != int(row["size_bytes"]) or hashlib.sha256(data).hexdigest() != file_id:
         raise ValueError("database original evidence failed SHA-256 verification")
@@ -275,7 +279,7 @@ def archived_status(conn, file_ids: list[str]) -> set[str]:
         chunk = unique[start:start+200]
         placeholders = ",".join("?" for _ in chunk)
         for row in conn.execute(
-            f"SELECT sha256 FROM {table} WHERE sha256 IN ({placeholders})",
+            f"SELECT sha256 FROM {table} WHERE exact_bytes IS NOT NULL AND sha256 IN ({placeholders})",
             tuple(chunk),
         ):
             result.add(row["sha256"])

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import original_archive
 import evidence_db
+import r2_evidence
 
 BUSINESS_SOURCES = {
     "coffee.sale": ("sale_lines", "source_row_key"),
@@ -49,19 +50,38 @@ def audit_evidence(conn) -> dict:
     corrupted = 0
     missing_database_originals = 0
     corrupted_database_originals = 0
+    missing_r2_originals = 0
+    corrupted_r2_originals = 0
     broken_links = 0
     issues: list[dict] = []
     for item in files:
+        # Verify the R2 original by re-reading all bytes and SHA-256.
+        # Legacy V41 originals are verified from BYTEA instead.
         try:
-            database_original=evidence_db.fetch(conn,item["id"])
-            if database_original is None:
-                missing_database_originals += 1
-                if len(issues)<MAX_ISSUES:
-                    issues.append({"type":"not_yet_copied_into_evidence_database","file_id":item["id"]})
+            if r2_evidence.location(conn,item["id"]):
+                r2_evidence.fetch(conn,item["id"])
+            else:
+                database_original=evidence_db.fetch(conn,item["id"])
+                if database_original is None:
+                    missing_r2_originals += 1
+                    missing_database_originals += 1
+                    if len(issues)<MAX_ISSUES:
+                        issues.append({"type":"original_not_backfilled_to_r2","file_id":item["id"]})
+                else:
+                    # Legacy originals remain readable, but need an R2 copy.
+                    if r2_evidence.mode(conn)=="r2":
+                        missing_r2_originals += 1
+                        if len(issues)<MAX_ISSUES:
+                            issues.append({"type":"legacy_original_needs_r2_copy","file_id":item["id"]})
         except (ValueError,OSError):
-            corrupted_database_originals += 1
-            if len(issues)<MAX_ISSUES:
-                issues.append({"type":"invalid_database_original","file_id":item["id"]})
+            if r2_evidence.location(conn,item["id"]):
+                corrupted_r2_originals += 1
+                if len(issues)<MAX_ISSUES:
+                    issues.append({"type":"r2_original_missing_or_corrupted","file_id":item["id"]})
+            else:
+                corrupted_database_originals += 1
+                if len(issues)<MAX_ISSUES:
+                    issues.append({"type":"invalid_database_original","file_id":item["id"]})
         try:
             path = original_archive.open_verified_file(item["id"],item["storage_key"])
             if path.stat().st_size != item["size_bytes"]:
@@ -110,7 +130,7 @@ def audit_evidence(conn) -> dict:
     unlinked_total=sum(unlinked_business.values())
     complete = file_total<=MAX_FILES and link_total<=MAX_LINKS
     status = ("partial" if not complete else
-              "needs_attention" if missing or corrupted or missing_database_originals or corrupted_database_originals or broken_links or unlinked_total else "passed")
+              "needs_attention" if missing or corrupted or missing_database_originals or corrupted_database_originals or missing_r2_originals or corrupted_r2_originals or broken_links or unlinked_total else "passed")
     return {
         "checked_at":datetime.now(timezone.utc).isoformat(),
         "status":status,
@@ -124,13 +144,15 @@ def audit_evidence(conn) -> dict:
         "corrupted_files":corrupted,
         "missing_database_originals":missing_database_originals,
         "corrupted_database_originals":corrupted_database_originals,
+        "missing_r2_originals":missing_r2_originals,
+        "corrupted_r2_originals":corrupted_r2_originals,
         "broken_business_links":broken_links,
         "files_without_business_links":without_link,
         "business_records_without_evidence":unlinked_total,
         "business_without_evidence_by_type":unlinked_business,
         "issues":issues,
-        "note":"核对 evidence 数据库存储的原文件字节及本地/NAS 镜像；"
-               "历史原件尚未复制入数据库会单独显示，不能伪称数据库已有原件。"
-               "未关联的业务可能早于本功能上线，未验证银行/税局真实性、"
-               "独立备份或电子会计档案合规。",
+        "note":"R2 完整原件下载后校验 SHA-256，V41 老原件可从数据库读取；"
+               "NAS 镜像独立核验。真实 R2 可用性及电子档案合规需单独验收；"
+               "缺失的历史原文件不能用账务数据重建。",
+
     }
