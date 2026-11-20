@@ -45,7 +45,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 37
+LATEST_SCHEMA_VERSION = 38
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -248,6 +248,16 @@ def ensure_postgres_triggers(conn: PostgresConnection) -> None:
         conn.execute("CREATE TRIGGER tr_open_item_fx_cny AFTER INSERT ON receivables_payables FOR EACH ROW EXECUTE FUNCTION workos_open_item_fx_default()")
 
 
+def ensure_tax_history_period_columns(conn) -> None:
+    # Old tax history is preserved as written. Dates for historic rows remain
+    # UNKNOWN rather than being guessed from issue date or change timestamp.
+    cols={row["name"] for row in conn.execute("PRAGMA table_info(invoice_tax_history)")}
+    if "effective_on" not in cols:
+        conn.execute("ALTER TABLE invoice_tax_history ADD COLUMN effective_on TEXT")
+    if "tax_period" not in cols:
+        conn.execute("ALTER TABLE invoice_tax_history ADD COLUMN tax_period TEXT")
+
+
 def init_db() -> None:
     with db() as conn:
         if getattr(conn, "is_postgres", False):
@@ -257,10 +267,13 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
-                if version is not None and int(version) == 36:
+                if version is not None and int(version) in (36,37):
                     conn.execute("BEGIN")
-                    original_archive.ensure_tables(conn)
-                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    if int(version)==36:
+                        original_archive.ensure_tables(conn)
+                        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    ensure_tax_history_period_columns(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -286,6 +299,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(36,?)", (datetime.now(timezone.utc).isoformat(),))
                     original_archive.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    ensure_tax_history_period_columns(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -811,6 +826,8 @@ def init_db() -> None:
         conn.execute("UPDATE stock_layers SET exchange_rate=COALESCE((SELECT exchange_rate FROM purchases WHERE purchases.id=stock_layers.purchase_id),exchange_rate)")
         original_archive.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+        ensure_tax_history_period_columns(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(38,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -3124,6 +3141,13 @@ class Api(BaseHTTPRequestHandler):
 
     def update_invoice_tax_status(self, data: dict) -> None:
         invoice_id, status = str(data["invoice_id"]), str(data["tax_status"])
+        effective_on=str(data.get("effective_on") or date.today().isoformat())
+        if len(effective_on)!=10:
+            raise ValueError("tax status effective_on must use YYYY-MM-DD")
+        try:
+            datetime.strptime(effective_on,"%Y-%m-%d")
+        except ValueError:
+            raise ValueError("tax status effective_on must be a valid date")
         if status not in ("pending", "eligible", "certified_deductible", "non_deductible", "void"):
             raise ValueError("invalid tax status")
         with db() as conn:
@@ -3136,13 +3160,17 @@ class Api(BaseHTTPRequestHandler):
             evidence = str(data.get("tax_evidence_ref", "")).strip() or None
             if status == "certified_deductible" and not evidence:
                 raise ValueError("税务机关认证依据编号必填；发票登记或内部认领不等于税务确认")
+            if effective_on < invoice["issued_on"]:
+                raise ValueError("tax confirmation date cannot precede invoice issue date")
             changed=invoice["tax_status"] != status or invoice["tax_evidence_ref"] != evidence
             if not changed:
                 return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "tax_credit_recognized": False, "accounting_effect": "none", "duplicate": True})
-            ensure_open(conn,invoice["issued_on"])
+            # The fiscal period of this later action controls locking, not the
+            # original invoice issue month, which may be legitimately closed.
+            ensure_open(conn,effective_on)
             conn.execute("UPDATE invoices SET tax_status=?,tax_evidence_ref=? WHERE id=?", (status, evidence, invoice_id))
-            conn.execute("INSERT INTO invoice_tax_history VALUES(?,?,?,?,?,?,?)", (str(uuid4()), invoice_id, invoice["tax_status"], status, evidence, now(), str(data.get("changed_by", "local-user"))))
-            return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "tax_credit_recognized": False, "accounting_effect": "none", "duplicate": False})
+            conn.execute("INSERT INTO invoice_tax_history (id,invoice_id,old_status,new_status,evidence_ref,changed_at,changed_by,effective_on,tax_period) VALUES(?,?,?,?,?,?,?,?,?)", (str(uuid4()), invoice_id, invoice["tax_status"], status, evidence, now(), str(data.get("changed_by", "local-user")),effective_on,effective_on[:7]))
+            return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "effective_on":effective_on,"tax_period":effective_on[:7],"tax_credit_recognized": False, "accounting_effect": "none", "duplicate": False})
 
     def close_period(self, data: dict) -> None:
         period = str(data["period"])
