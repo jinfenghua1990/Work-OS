@@ -16,6 +16,7 @@ from urllib.parse import unquote
 
 import original_archive
 import evidence_db
+import legacy_raw_records
 import evidence_audit
 import local_auth
 import xlsx_reader
@@ -53,7 +54,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 41
+LATEST_SCHEMA_VERSION = 42
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -304,10 +305,19 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version)==41:
+                    conn.execute("BEGIN")
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version)==40:
                     conn.execute("BEGIN")
                     evidence_db.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -317,6 +327,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
                     evidence_db.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -328,6 +340,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
                     evidence_db.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -344,6 +358,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
                     evidence_db.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -377,6 +393,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
                     evidence_db.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -910,6 +928,8 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)", (now(),))
         evidence_db.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)", (now(),))
+        legacy_raw_records.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1166,6 +1186,12 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(200,stock_cover(conn))
             if path == "/api/archive/audit":
                 return self.reply(200,evidence_audit.audit_evidence(conn))
+            if path == "/api/archive/legacy-summary":
+                return self.reply(200,{
+                    "source_system":"coffeebear-prod",
+                    "tables":legacy_raw_records.counts(conn),
+                    "note":"只读的旧系统数据库行快照；文件原件必须另外核验字节和 SHA-256。"
+                })
             if path == "/api/archive/files":
                 rows=conn.execute(
                     "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
@@ -3628,7 +3654,7 @@ def postgres_schema_status() -> dict:
         "bank_transactions", "invoices", "journal_entries", "journal_lines",
         "archive_files", "archive_links", "sample_dispositions",
         "evidence.original_documents", "evidence.row_snapshots",
-        "evidence.import_batches",
+        "evidence.import_batches", "evidence.legacy_source_records",
     )
     with db() as conn:
         exists=conn.execute(
