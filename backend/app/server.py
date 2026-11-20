@@ -15,6 +15,8 @@ from uuid import uuid4
 from urllib.parse import unquote
 
 import original_archive
+import local_auth
+import xlsx_reader
 from coffee_stock_cover import stock_cover
 
 from coffee_source_identity import normalize_sale_source
@@ -1035,7 +1037,7 @@ class Api(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} - {fmt % args}")
 
-    def reply(self, status: int, payload: object) -> None:
+    def reply(self, status: int, payload: object, cookie: str | None = None) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1043,6 +1045,11 @@ class Api(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:5175")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key")
+        self.send_header("Cache-Control","no-store")
+        self.send_header("X-Content-Type-Options","nosniff")
+        self.send_header("Referrer-Policy","no-referrer")
+        if cookie:
+            self.send_header("Set-Cookie",cookie)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -1055,11 +1062,31 @@ class Api(BaseHTTPRequestHandler):
             raise ValueError("JSON object required")
         return data
 
+    def _session_valid(self) -> bool:
+        # A malicious web page must not be able to POST to a localhost financial API.
+        host_header=self.headers.get("Host","").split(":")[0].strip().lower()
+        if host_header not in ("127.0.0.1","localhost"):
+            self.reply(403,{"error":"invalid local request host"})
+            return False
+        if not local_auth.authenticated(self.headers):
+            self.reply(401,{"error":"login required","code":"WORKOS_AUTH_REQUIRED"})
+            return False
+        return True
+
     def do_OPTIONS(self) -> None:
+        if not local_auth.origin_allowed(self.headers.get("Origin")):
+            return self.reply(403,{"error":"request origin not allowed"})
         self.reply(204, {})
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path=="/api/auth/status":
+            return self.reply(200,{"requires_login":local_auth.enabled(),
+                "authenticated":local_auth.authenticated(self.headers),
+                "role":"owner" if local_auth.authenticated(self.headers) else None,
+                "local_only":True})
+        if not self._session_valid():
+            return
         path = parsed.path
         if path == "/api/health":
             return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
@@ -1494,7 +1521,39 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if not local_auth.origin_allowed(self.headers.get("Origin")):
+            return self.reply(403,{"error":"request origin not allowed"})
+        if path=="/api/auth/login":
+            if self.headers.get("Host","").split(":")[0].strip().lower() not in ("127.0.0.1","localhost"):
+                return self.reply(403,{"error":"invalid local request host"})
+            try:
+                data=self.body()
+                if not local_auth.enabled():
+                    return self.reply(200,{"authenticated":True,"local_only":True})
+                password=data.get("password")
+                if not isinstance(password,str) or len(password)>1024:
+                    return self.reply(422,{"error":"password is required"})
+                token=local_auth.issue_session(self.client_address[0],password)
+                if not token:
+                    return self.reply(401,{"error":"invalid password or temporarily rate-limited"})
+                return self.reply(200,{"authenticated":True,"role":"owner"},
+                                  cookie=local_auth.session_cookie(token))
+            except (ValueError,KeyError,TypeError,json.JSONDecodeError) as exc:
+                return self.reply(422,{"error":str(exc)})
+        if not self._session_valid():
+            return
+        if path=="/api/auth/logout":
+            local_auth.end_session(self.headers)
+            return self.reply(200,{"authenticated":False},
+                              cookie=local_auth.clear_cookie())
         try:
+            if path == "/api/import/preview-xlsx":
+                raw_length=self.headers.get("Content-Length","")
+                if not raw_length.isdigit() or not 0<int(raw_length)<=xlsx_reader.XLSX_BYTES_LIMIT:
+                    raise ValueError("Excel file must be non-empty and no larger than 20 MiB")
+                rows=xlsx_reader.first_sheet_rows(self.rfile.read(int(raw_length)))
+                return self.reply(200,{"rows":rows,"sheet":"first","count":len(rows)-1,
+                    "archived":False,"note":"preview only; original must be archived before posting"})
             if path == "/api/archive/files":
                 return self.upload_original_document()
             data = self.body()
@@ -1929,6 +1988,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"id":cost_id,"source_key":source_key,"amount":str(value),"currency":currency,"base_amount_cny":str(base),"cost_type":cost_type,"cost_treatment":treatment,"capitalized":treatment=="capitalized","payable_id":posted_payable})
 
     def import_bike_sale(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         source_key=str(data.get("source_key", "")).strip()
         order_no=str(data.get("alsvid_order_no", "")).strip()
         source=str(data.get("source", "")).strip()
@@ -1959,6 +2019,8 @@ class Api(BaseHTTPRequestHandler):
             if duplicate:
                 order=conn.execute("SELECT id FROM bike_orders WHERE alsvid_order_no=?",(order_no,)).fetchone()
                 require_same_source_payload(duplicate,{"bike_order_id":order["id"] if order else "","source":source,"external_order_no":external_order_no,"sold_on":sold_on,"channel":channel,"quantity":quantity,"currency":currency,"net_revenue":revenue,"exchange_rate":rate,"rate_date":rate_date})
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"bike.sale",duplicate["id"])
                 return self.reply(200,{"id":duplicate["id"],"duplicate":True,"posting_status":"posted"})
             ensure_open(conn,sold_on)
             order=conn.execute("SELECT * FROM bike_orders WHERE alsvid_order_no=?",(order_no,)).fetchone()
@@ -1982,6 +2044,8 @@ class Api(BaseHTTPRequestHandler):
             receivable_id=str(uuid4())
             conn.execute("INSERT INTO receivables_payables VALUES(?,?,?,?,?,?, '0.00',?,NULL,?)",(receivable_id,"receivable","bike_sale",sale_id,channel,str(revenue),currency,now()))
             record_open_item_fx(conn,receivable_id,revenue_cny,rate,rate_date,"bike_sales_import")
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"bike.sale",sale_id)
             return self.reply(201,{"id":sale_id,"source_key":source_key,"quantity":quantity,"revenue_cny":str(revenue_cny),"unit_landed_cost_cny":str(unit_cost),"cogs_cny":str(cogs),"gross_margin_cny":str((revenue_cny-cogs).quantize(CENT)),"posting_status":"posted"})
 
     def receive_bike_order(self, data: dict) -> None:
@@ -3229,8 +3293,13 @@ class Api(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    init_db()
     host = os.environ.get("WORKOS_HOST", "127.0.0.1")
+    local_auth.require_loopback_host(host)
+    if not local_auth.configured_hash_valid():
+        raise RuntimeError("invalid WORKOS_AUTH_PASSWORD_HASH")
+    if not local_auth.enabled():
+        print("WARNING: local password not configured; this API must remain on loopback.")
+    init_db()
     port = int(os.environ.get("WORKOS_PORT", "8103"))
     server = ThreadingHTTPServer((host, port), Api)
     database_label = f"SQLite: {DB_PATH}" if DB_BACKEND == "sqlite" else "PostgreSQL"
