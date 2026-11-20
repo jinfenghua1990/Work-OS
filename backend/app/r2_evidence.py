@@ -118,7 +118,12 @@ def _store_object(sha256,payload):
         code=getattr(exc,"response",{}).get("Error",{}).get("Code","")
         if code not in ("PreconditionFailed","412"):
             raise ValueError("R2 immutable upload failed; no financial posting") from exc
-    _read_checked(client,bucket,key,sha256,len(payload))
+    try:
+        _read_checked(client,bucket,key,sha256,len(payload))
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("R2 read-back verification failed; no financial posting") from exc
     return bucket,key
 
 def location(conn,file_id):
