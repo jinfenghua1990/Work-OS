@@ -15,6 +15,7 @@ from uuid import uuid4
 from urllib.parse import unquote
 
 import original_archive
+import evidence_db
 import evidence_audit
 import local_auth
 import xlsx_reader
@@ -52,7 +53,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 40
+LATEST_SCHEMA_VERSION = 41
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -303,10 +304,19 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version)==40:
+                    conn.execute("BEGIN")
+                    evidence_db.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version)==39:
                     conn.execute("BEGIN")
                     coffee_refund_only.ensure_refund_table(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
+                    evidence_db.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -316,6 +326,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)",(now(),))
                     coffee_refund_only.ensure_refund_table(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
+                    evidence_db.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -330,6 +342,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)",(now(),))
                     coffee_refund_only.ensure_refund_table(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
+                    evidence_db.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -361,6 +375,8 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)",(now(),))
                     coffee_refund_only.ensure_refund_table(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)",(now(),))
+                    evidence_db.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -892,6 +908,8 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(39,?)", (now(),))
         coffee_refund_only.ensure_refund_table(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(40,?)", (now(),))
+        evidence_db.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1154,7 +1172,23 @@ class Api(BaseHTTPRequestHandler):
                     "FROM archive_files f JOIN archive_uploads u ON u.file_id=f.id "
                     "ORDER BY u.uploaded_at DESC LIMIT 500"
                 ).fetchall()
-                return self.reply(200,[dict(row) for row in rows])
+                items=[dict(row) for row in rows]
+                archived=evidence_db.archived_status(conn,[row["id"] for row in items])
+                for row in items:
+                    row["stored_in_database"]=row["id"] in archived
+                return self.reply(200,items)
+            if path.startswith("/api/archive/files/") and path.endswith("/raw-rows"):
+                file_id=path.split("/")[4]
+                query=parse_qs(parsed.query)
+                try:
+                    offset=int(query.get("offset",["0"])[0])
+                    limit=int(query.get("limit",["100"])[0])
+                    result=evidence_db.source_rows(conn,file_id,offset,limit)
+                except (ValueError,TypeError) as exc:
+                    return self.reply(422,{"error":str(exc)})
+                if result is None:
+                    return self.reply(404,{"error":"source rows not found"})
+                return self.reply(200,result)
             if path == "/api/archive/links":
                 source=parse_qs(parsed.query).get("source_system",[""])[0]
                 source_id=parse_qs(parsed.query).get("source_document_id",[""])[0]
@@ -1173,19 +1207,23 @@ class Api(BaseHTTPRequestHandler):
                 metadata=original_archive.fetch_file_metadata(conn,file_id)
                 if not metadata: return self.reply(404,{"error":"archive file not found"})
                 try:
-                    archive_path=original_archive.open_verified_file(file_id, metadata["storage_key"])
+                    # Database evidence is the canonical original; the NAS
+                    # path remains the separately verifiable secondary copy.
+                    exact=evidence_db.fetch(conn,file_id)
+                    if exact is None:
+                        # Historical v37-v40 originals might not be backfilled.
+                        archive_path=original_archive.open_verified_file(file_id,metadata["storage_key"])
+                        exact=archive_path.read_bytes()
                 except (ValueError,OSError) as exc:
                     return self.reply(422,{"error":str(exc)})
                 self.send_response(200)
                 self.send_header("Content-Type","application/octet-stream")
                 self.send_header("Content-Disposition",original_archive.download_disposition(metadata["original_name"]))
-                self.send_header("Content-Length",str(metadata["size_bytes"]))
+                self.send_header("Content-Length",str(len(exact)))
                 self.send_header("Cache-Control","no-store")
                 self.send_header("X-Content-Type-Options","nosniff")
                 self.end_headers()
-                with archive_path.open("rb") as original:
-                    while chunk:=original.read(1024*1024):
-                        self.wfile.write(chunk)
+                self.wfile.write(exact)
                 return
             if path == "/api/accounts":
                 rows=conn.execute("SELECT account_code,account_name,account_type,normal_side,statement,active FROM chart_of_accounts ORDER BY account_code").fetchall()
@@ -3589,6 +3627,8 @@ def postgres_schema_status() -> dict:
         "purchases", "stock_layers", "sales_imports",
         "bank_transactions", "invoices", "journal_entries", "journal_lines",
         "archive_files", "archive_links", "sample_dispositions",
+        "evidence.original_documents", "evidence.row_snapshots",
+        "evidence.import_batches",
     )
     with db() as conn:
         exists=conn.execute(
@@ -3603,7 +3643,8 @@ def postgres_schema_status() -> dict:
         missing = []
         for table in critical:
             row=conn.execute(
-                "SELECT to_regclass(?) AS table_name", (f"public.{table}",)
+                "SELECT to_regclass(?) AS table_name",
+                (table if "." in table else f"public.{table}",)
             ).fetchone()
             if row["table_name"] is None:
                 missing.append(table)
