@@ -95,7 +95,7 @@ class R2OriginalEvidenceTests(unittest.TestCase):
         raw=b"test content"
         file_id=hashlib.sha256(raw).hexdigest()
         with patch.object(self.s3,"get_object",side_effect=OSError("network outage")):
-            with self.assertRaises(OSError):
+            with self.assertRaisesRegex(ValueError,"read-back verification failed"):
                 r2_evidence.store(self.conn,file_id,raw,"batch1","original.csv","bank","2026-11")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM evidence.r2_locations").fetchone()[0],0)
     def test_missing_r2_credentials_rejected(self):
