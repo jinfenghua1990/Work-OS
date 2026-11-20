@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import original_archive
+import evidence_db
 
 BUSINESS_SOURCES = {
     "coffee.sale": ("sale_lines", "source_row_key"),
@@ -46,9 +47,21 @@ def audit_evidence(conn) -> dict:
 
     missing = 0
     corrupted = 0
+    missing_database_originals = 0
+    corrupted_database_originals = 0
     broken_links = 0
     issues: list[dict] = []
     for item in files:
+        try:
+            database_original=evidence_db.fetch(conn,item["id"])
+            if database_original is None:
+                missing_database_originals += 1
+                if len(issues)<MAX_ISSUES:
+                    issues.append({"type":"not_yet_copied_into_evidence_database","file_id":item["id"]})
+        except (ValueError,OSError):
+            corrupted_database_originals += 1
+            if len(issues)<MAX_ISSUES:
+                issues.append({"type":"invalid_database_original","file_id":item["id"]})
         try:
             path = original_archive.open_verified_file(item["id"],item["storage_key"])
             if path.stat().st_size != item["size_bytes"]:
@@ -97,7 +110,7 @@ def audit_evidence(conn) -> dict:
     unlinked_total=sum(unlinked_business.values())
     complete = file_total<=MAX_FILES and link_total<=MAX_LINKS
     status = ("partial" if not complete else
-              "needs_attention" if missing or corrupted or broken_links or unlinked_total else "passed")
+              "needs_attention" if missing or corrupted or missing_database_originals or corrupted_database_originals or broken_links or unlinked_total else "passed")
     return {
         "checked_at":datetime.now(timezone.utc).isoformat(),
         "status":status,
@@ -109,12 +122,15 @@ def audit_evidence(conn) -> dict:
         "checked_known_business_links":checked_links,
         "missing_files":missing,
         "corrupted_files":corrupted,
+        "missing_database_originals":missing_database_originals,
+        "corrupted_database_originals":corrupted_database_originals,
         "broken_business_links":broken_links,
         "files_without_business_links":without_link,
         "business_records_without_evidence":unlinked_total,
         "business_without_evidence_by_type":unlinked_business,
         "issues":issues,
-        "note":"只核对当前档案目录与数据库索引；未关联业务的原件可能是待处理文件，"
-               "未关联原件的历史业务记录可能早于本功能上线，并不代表原件丢失。"
-               "未验证银行/税局真实性、独立备份或电子会计档案合规。",
+        "note":"核对 evidence 数据库存储的原文件字节及本地/NAS 镜像；"
+               "历史原件尚未复制入数据库会单独显示，不能伪称数据库已有原件。"
+               "未关联的业务可能早于本功能上线，未验证银行/税局真实性、"
+               "独立备份或电子会计档案合规。",
     }

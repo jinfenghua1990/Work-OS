@@ -16,6 +16,8 @@ from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
+import evidence_db
+
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx", ".pdf", ".ofd", ".xml", ".txt", ".zip"}
 CATEGORIES = {"bank", "input_invoice", "output_invoice", "sales", "purchase", "expense", "contract", "other"}
 DEFAULT_LIMIT = 50 * 1024 * 1024
@@ -118,10 +120,17 @@ def ingest(conn, stream, size: int, filename: str, category: str, period: str, s
             "VALUES (?,?,?,?,?,?,?)",
             (upload_id, hex_digest, filename, category, period, source_system, stamp),
         )
+        # Exactly the same original bytes are copied into the isolated SQL
+        # evidence area. The business record is not posted until this succeeds.
+        evidence=evidence_db.store(
+            conn,hex_digest,dest.read_bytes(),upload_id,
+            filename,category,period,source_system,
+        )
         return {"id":hex_digest,"upload_id":upload_id,"sha256":hex_digest,
                 "size_bytes":size,"original_name":filename,"category":category,
                 "period":period,"duplicate_content":dest.stat().st_size == size and
-                conn.execute("SELECT COUNT(*) FROM archive_uploads WHERE file_id=?", (hex_digest,)).fetchone()[0] > 1}
+                conn.execute("SELECT COUNT(*) FROM archive_uploads WHERE file_id=?", (hex_digest,)).fetchone()[0] > 1,
+                **evidence}
     finally:
         tmp.unlink(missing_ok=True)
 
