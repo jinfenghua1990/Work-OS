@@ -15,6 +15,7 @@ from uuid import uuid4
 from urllib.parse import unquote
 
 import original_archive
+import evidence_audit
 import local_auth
 import xlsx_reader
 import exhibition_assets
@@ -1109,6 +1110,8 @@ class Api(BaseHTTPRequestHandler):
         with db() as conn:
             if path == "/api/coffee/stock-cover":
                 return self.reply(200,stock_cover(conn))
+            if path == "/api/archive/audit":
+                return self.reply(200,evidence_audit.audit_evidence(conn))
             if path == "/api/archive/files":
                 rows=conn.execute(
                     "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
