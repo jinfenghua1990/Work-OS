@@ -15,12 +15,14 @@ from uuid import uuid4
 from urllib.parse import unquote
 
 import original_archive
+import evidence_audit
 import local_auth
 import xlsx_reader
 import exhibition_assets
 from coffee_stock_cover import stock_cover
 
 from coffee_source_identity import normalize_sale_source
+from bank_source_identity import bank_reference_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -1128,6 +1130,8 @@ class Api(BaseHTTPRequestHandler):
         with db() as conn:
             if path == "/api/coffee/stock-cover":
                 return self.reply(200,stock_cover(conn))
+            if path == "/api/archive/audit":
+                return self.reply(200,evidence_audit.audit_evidence(conn))
             if path == "/api/archive/files":
                 rows=conn.execute(
                     "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
@@ -3081,6 +3085,9 @@ class Api(BaseHTTPRequestHandler):
 
     def import_bank(self, data: dict) -> None:
         archive_id=str(data.get("archive_file_id") or "").strip()
+        strict_identity=data.get("strict_identity") is True
+        if strict_identity and not archive_id:
+            raise ValueError("strict bank imports require an archived original document")
         rows = data.get("rows")
         if not isinstance(rows, list) or not rows:
             raise ValueError("rows must contain at least one bank transaction")
@@ -3088,11 +3095,14 @@ class Api(BaseHTTPRequestHandler):
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for index, row in enumerate(rows, 1):
-                key = str(row.get("source_key", "")).strip()
+                supplied_key = str(row.get("source_key", "")).strip()
+                key = supplied_key
                 source_system = str(row.get("source_system", "")).strip()
                 source_document_id = str(row.get("source_document_id", "")).strip()
                 try:
-                    if not key:
+                    if strict_identity:
+                        key = bank_reference_identity(row)
+                    elif not key:
                         raise ValueError("stable source_key is required")
                     if bool(source_system) != bool(source_document_id):
                         raise ValueError("source_system and source_document_id must be provided together")
@@ -3121,13 +3131,28 @@ class Api(BaseHTTPRequestHandler):
                     existing = conn.execute("SELECT * FROM bank_transactions WHERE source_key=?", (key,)).fetchone()
                     if not existing and source_system:
                         existing = conn.execute("SELECT * FROM bank_transactions WHERE source_system=? AND source_document_id=?", (source_system, source_document_id)).fetchone()
+                    if strict_identity and not existing:
+                        # Also compare existing legacy CSV rows: old keys were
+                        # filename/line derived and must never be reposted.
+                        matches = conn.execute(
+                            "SELECT * FROM bank_transactions "
+                            "WHERE account_name=? AND transaction_on=? AND bank_reference=?",
+                            (account_name,day,bank_reference)
+                        ).fetchall()
+                        if len(matches)>1:
+                            raise ValueError("multiple historical transactions share this bank reference; reconcile duplicates before importing")
+                        if matches:
+                            existing = matches[0]
                     payload = {"transaction_on": day, "account_name": account_name, "bank_reference": bank_reference, "description": description, "direction": direction, "amount": value, "currency": currency, "exchange_rate": rate, "rate_date": rate_date, "rate_source": rate_source, "base_amount_cny": base_amount, "source_system": source_system, "source_document_id": source_document_id}
                     if existing:
-                        if any(str(existing[name] if existing[name] is not None else "") != str(val if val is not None else "") for name, val in payload.items()):
-                            raise ValueError("external bank source is already recorded with a different payload; reconcile the source record")
+                        compare_payload = payload if not strict_identity else {
+                            k:v for k,v in payload.items() if k not in ("source_system","source_document_id")
+                        }
+                        if any(str(existing[name] if existing[name] is not None else "") != str(val if val is not None else "") for name, val in compare_payload.items()):
+                            raise ValueError("bank reference already exists with different business data; reconcile the original statement")
                         if archive_id:
                             original_archive.link_document(conn,archive_id,"finance.bank_transaction",existing["id"])
-                        duplicates.append(key)
+                        duplicates.append(supplied_key if strict_identity else key)
                         continue
                     bank_account = conn.execute("SELECT * FROM bank_accounts WHERE account_name=?", (account_name,)).fetchone()
                     if bank_account and bank_account["currency"] != currency:
@@ -3139,7 +3164,10 @@ class Api(BaseHTTPRequestHandler):
                     conn.execute("INSERT INTO bank_transactions (id,source_key,transaction_on,account_name,bank_reference,description,direction,amount,currency,created_at,exchange_rate,rate_date,rate_source,base_amount_cny,source_system,source_document_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (row_id, key, day, account_name, bank_reference, description, direction, str(value), currency, now(), str(rate), rate_date, rate_source, str(base_amount), source_system, source_document_id))
                     if archive_id:
                         original_archive.link_document(conn,archive_id,"finance.bank_transaction",row_id)
-                    created.append({"source_key": key, "source_system": source_system or None, "source_document_id": source_document_id or None, "id": row_id})
+                    created.append({"source_key": supplied_key if strict_identity else key,
+                                    "canonical_source_key": key,
+                                    "source_system": source_system or None,
+                                    "source_document_id": source_document_id or None, "id": row_id})
                 except (ValueError, KeyError, TypeError) as exc:
                     rejected.append({"row": index, "source_key": row.get("source_key"), "error": str(exc)})
         return self.reply(200, {"created": created, "duplicates": duplicates, "rejected": rejected})
