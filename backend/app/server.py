@@ -1682,6 +1682,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"journal_entry_id":entry["id"],"status":"posted","debit_total":str(debit_total),"credit_total":str(credit_total),"line_count":len(lines)})
 
     def create_purchase(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         number = str(data["number"]).strip()
         supplier = str(data["supplier"]).strip()
         sku = str(data["sku"]).strip()
@@ -1717,6 +1718,8 @@ class Api(BaseHTTPRequestHandler):
                 if not project or project["entity_code"] != entity_code:
                     raise ValueError("project code must exist and match the selected legal entity")
             conn.execute("INSERT INTO purchases (id,number,supplier,sku,item_type,ordered_qty,unit_cost,received_qty,currency,exchange_rate,rate_date,created_at,business_line,entity_code,project_code,document_amount) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)", (pid, number, supplier, sku, item_type, qty, str(cost), currency, str(rate), rate_date, now(), business_line, entity_code, project_code, str(document_amount)))
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"coffee.purchase",pid)
             return self.reply(201, {"id": pid, "number": number, "status": "open", "ordered_quantity": qty, "document_amount": str(document_amount)})
 
     def save_packaging_rule(self, data: dict) -> None:
