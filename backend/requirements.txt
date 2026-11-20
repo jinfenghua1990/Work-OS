@@ -1,2 +1,4 @@
 # Install this optional driver when running with PostgreSQL/Neon.
 psycopg[binary]>=3.2,<4
+# Cloudflare R2 uses its S3-compatible API (no Neon object storage).
+boto3>=1.35,<2
