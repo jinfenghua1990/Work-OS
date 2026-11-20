@@ -15,6 +15,7 @@ from uuid import uuid4
 from urllib.parse import unquote
 
 import original_archive
+import local_auth
 from coffee_stock_cover import stock_cover
 
 from coffee_source_identity import normalize_sale_source
@@ -1035,7 +1036,7 @@ class Api(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"{self.address_string()} - {fmt % args}")
 
-    def reply(self, status: int, payload: object) -> None:
+    def reply(self, status: int, payload: object, cookie: str | None = None) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1043,6 +1044,11 @@ class Api(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:5175")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key")
+        self.send_header("Cache-Control","no-store")
+        self.send_header("X-Content-Type-Options","nosniff")
+        self.send_header("Referrer-Policy","no-referrer")
+        if cookie:
+            self.send_header("Set-Cookie",cookie)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -1055,11 +1061,31 @@ class Api(BaseHTTPRequestHandler):
             raise ValueError("JSON object required")
         return data
 
+    def _session_valid(self) -> bool:
+        # A malicious web page must not be able to POST to a localhost financial API.
+        host_header=self.headers.get("Host","").split(":")[0].strip().lower()
+        if host_header not in ("127.0.0.1","localhost"):
+            self.reply(403,{"error":"invalid local request host"})
+            return False
+        if not local_auth.authenticated(self.headers):
+            self.reply(401,{"error":"login required","code":"WORKOS_AUTH_REQUIRED"})
+            return False
+        return True
+
     def do_OPTIONS(self) -> None:
+        if not local_auth.origin_allowed(self.headers.get("Origin")):
+            return self.reply(403,{"error":"request origin not allowed"})
         self.reply(204, {})
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path=="/api/auth/status":
+            return self.reply(200,{"requires_login":local_auth.enabled(),
+                "authenticated":local_auth.authenticated(self.headers),
+                "role":"owner" if local_auth.authenticated(self.headers) else None,
+                "local_only":True})
+        if not self._session_valid():
+            return
         path = parsed.path
         if path == "/api/health":
             return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
@@ -1494,6 +1520,31 @@ class Api(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if not local_auth.origin_allowed(self.headers.get("Origin")):
+            return self.reply(403,{"error":"request origin not allowed"})
+        if path=="/api/auth/login":
+            if self.headers.get("Host","").split(":")[0].strip().lower() not in ("127.0.0.1","localhost"):
+                return self.reply(403,{"error":"invalid local request host"})
+            try:
+                data=self.body()
+                if not local_auth.enabled():
+                    return self.reply(200,{"authenticated":True,"local_only":True})
+                password=data.get("password")
+                if not isinstance(password,str) or len(password)>1024:
+                    return self.reply(422,{"error":"password is required"})
+                token=local_auth.issue_session(self.client_address[0],password)
+                if not token:
+                    return self.reply(401,{"error":"invalid password or temporarily rate-limited"})
+                return self.reply(200,{"authenticated":True,"role":"owner"},
+                                  cookie=local_auth.session_cookie(token))
+            except (ValueError,KeyError,TypeError,json.JSONDecodeError) as exc:
+                return self.reply(422,{"error":str(exc)})
+        if not self._session_valid():
+            return
+        if path=="/api/auth/logout":
+            local_auth.end_session(self.headers)
+            return self.reply(200,{"authenticated":False},
+                              cookie=local_auth.clear_cookie())
         try:
             if path == "/api/archive/files":
                 return self.upload_original_document()
@@ -3229,8 +3280,13 @@ class Api(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    init_db()
     host = os.environ.get("WORKOS_HOST", "127.0.0.1")
+    local_auth.require_loopback_host(host)
+    if not local_auth.configured_hash_valid():
+        raise RuntimeError("invalid WORKOS_AUTH_PASSWORD_HASH")
+    if not local_auth.enabled():
+        print("WARNING: local password not configured; this API must remain on loopback.")
+    init_db()
     port = int(os.environ.get("WORKOS_PORT", "8103"))
     server = ThreadingHTTPServer((host, port), Api)
     database_label = f"SQLite: {DB_PATH}" if DB_BACKEND == "sqlite" else "PostgreSQL"
