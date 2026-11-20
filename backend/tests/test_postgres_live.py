@@ -59,7 +59,7 @@ class PostgresLiveTests(unittest.TestCase):
             )
 
     def test_evidence_schema_preserves_exact_original_and_enforces_immutability(self):
-        raw=b"order_id,price\\r\\n000123,0010.50\\r\\n".replace(b"\\\\r",b"\\r").replace(b"\\\\n",b"\\n")
+        raw=b"order_id,price"+bytes((13,10))+b"000123,0010.50"+bytes((13,10))
         file_id=hashlib.sha256(raw).hexdigest()
         # A dummy legacy archive metadata row lets us exercise SQL evidence
         # independently from the disk/NAS mirror.
