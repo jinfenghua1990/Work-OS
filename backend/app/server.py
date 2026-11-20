@@ -2469,6 +2469,8 @@ class Api(BaseHTTPRequestHandler):
                 raise ValueError("sample dispatch not found")
             if dispatch["returned_quantity"] + dispatch["disposed_quantity"] + qty > dispatch["quantity"]:
                 raise ValueError("returned sample quantity exceeds the outstanding dispatched quantity")
+            if day<dispatch["dispatched_on"]:
+                raise ValueError("return date cannot precede sample dispatch")
             project = conn.execute("SELECT entity_code FROM projects WHERE code=?", (dispatch["project_code"],)).fetchone()
             return_id = str(uuid4())
             conn.execute("INSERT INTO sample_returns (id,source_key,dispatch_id,returned_on,quantity,total_cost,created_at) VALUES(?,?,?,?,?,'0.00',?)", (return_id, source_key, dispatch_id, day, qty, now()))
@@ -2502,6 +2504,95 @@ class Api(BaseHTTPRequestHandler):
             line_business="coffee" if dispatch["accounting_treatment"]=="asset_transfer" else "exhibition"
             journal(conn, "exhibition_sample_return", return_id, day, [("inventory", restored_cost, Decimal(0)), (reverse_account, Decimal(0), restored_cost)], line_business, project["entity_code"], dispatch["project_code"])
             return self.reply(201, {"id":return_id,"duplicate":False,"dispatch_id":dispatch_id,"returned_quantity":qty,"restored_cost":str(restored_cost),"currency":"CNY"})
+
+    def dispose_sample(self, data: dict) -> None:
+        """Confirm actual sample consumption/gifting/damage; do not alter main stock twice."""
+        source_key=str(data.get("source_key") or "").strip()
+        dispatch_id=str(data.get("dispatch_id") or "").strip()
+        reason=str(data.get("reason") or "consumed").strip()
+        day=str(data.get("disposed_on") or date.today().isoformat())
+        qty=whole_quantity(data.get("quantity",0),"sample disposed quantity")
+        try:
+            datetime.strptime(day,"%Y-%m-%d")
+        except ValueError:
+            raise ValueError("sample disposition date must use YYYY-MM-DD")
+        if not source_key or not dispatch_id or qty<=0 or reason not in ("consumed","gifted","damaged"):
+            raise ValueError("sample disposition needs a stable key, source dispatch, positive quantity and valid reason")
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            prior=conn.execute("SELECT * FROM sample_dispositions WHERE source_key=?",(source_key,)).fetchone()
+            if prior:
+                require_same_source_payload(prior,{"dispatch_id":dispatch_id,"quantity":qty,
+                                                   "reason":reason,"disposed_on":day})
+                return self.reply(200,{"id":prior["id"],"duplicate":True,
+                                       "total_cost":prior["total_cost"]})
+            dispatch=conn.execute("SELECT * FROM sample_dispatches WHERE id=?",(dispatch_id,)).fetchone()
+            if not dispatch:
+                raise ValueError("sample dispatch does not exist")
+            if dispatch["accounting_treatment"]!="asset_transfer":
+                raise ValueError("legacy expensed dispatch cannot be disposed again; reconcile the historical ledger")
+            if day<dispatch["dispatched_on"]:
+                raise ValueError("disposition date cannot precede sample dispatch")
+            if dispatch["returned_quantity"]+dispatch["disposed_quantity"]+qty>dispatch["quantity"]:
+                raise ValueError("disposition exceeds outstanding outside samples")
+            ensure_open(conn,day)
+            project=conn.execute("SELECT entity_code FROM projects WHERE code=?",
+                                 (dispatch["project_code"],)).fetchone()
+            if not project:
+                raise ValueError("exhibition project is missing")
+            disposition_id=str(uuid4())
+            conn.execute(
+                "INSERT INTO sample_dispositions (id,source_key,dispatch_id,disposed_on,quantity,reason,total_cost,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (disposition_id,source_key,dispatch_id,day,qty,reason,"0.00",now()),
+            )
+            cost_total=Decimal(0)
+            role_quantities={"item":qty}
+            if int(dispatch["packaging_per_unit"])>0 and not dispatch["packaging_included"]:
+                role_quantities["packaging"]=qty*int(dispatch["packaging_per_unit"])
+            for role,required in role_quantities.items():
+                layers=conn.execute(
+                    "SELECT l.* FROM sample_dispatch_layers l "
+                    "JOIN stock_layers s ON s.id=l.stock_layer_id "
+                    "WHERE l.dispatch_id=? AND l.item_role=? "
+                    "AND l.returned_quantity+l.disposed_quantity<l.quantity "
+                    "ORDER BY s.created_at,s.id",
+                    (dispatch_id,role),
+                ).fetchall()
+                if sum(layer["quantity"]-layer["returned_quantity"]-layer["disposed_quantity"] for layer in layers)<required:
+                    raise ValueError("disposition quantity exceeds original FIFO layer balance")
+                remaining=required
+                for layer in layers:
+                    if not remaining:
+                        break
+                    taken=min(remaining,layer["quantity"]-layer["returned_quantity"]-layer["disposed_quantity"])
+                    fx=conn.execute(
+                        "SELECT COALESCE(p.exchange_rate,s.exchange_rate) AS exchange_rate "
+                        "FROM stock_layers s LEFT JOIN purchases p ON p.id=s.purchase_id WHERE s.id=?",
+                        (layer["stock_layer_id"],)
+                    ).fetchone()
+                    if not fx:
+                        raise ValueError("original sample stock layer does not exist")
+                    portion=Decimal(layer["unit_cost"])*taken*Decimal(fx["exchange_rate"])
+                    cost_total+=portion
+                    conn.execute("UPDATE sample_dispatch_layers SET disposed_quantity=disposed_quantity+? WHERE id=?",
+                                 (taken,layer["id"]))
+                    conn.execute(
+                        "INSERT INTO sample_disposition_layers (id,disposition_id,dispatch_layer_id,sku,quantity,cost_cny) VALUES(?,?,?,?,?,?)",
+                        (str(uuid4()),disposition_id,layer["id"],layer["sku"],taken,str(portion))
+                    )
+                    remaining-=taken
+            total=cost_total.quantize(CENT,rounding=ROUND_HALF_UP)
+            conn.execute("UPDATE sample_dispositions SET total_cost=? WHERE id=?",
+                         (str(total),disposition_id))
+            conn.execute("UPDATE sample_dispatches SET disposed_quantity=disposed_quantity+? WHERE id=?",
+                         (qty,dispatch_id))
+            journal(conn,"exhibition_sample_disposition",disposition_id,day,[
+                ("operating_expense:sample_cost",total,Decimal(0)),
+                ("inventory:exhibition",Decimal(0),total)
+            ],"coffee",project["entity_code"],dispatch["project_code"])
+            return self.reply(201,{"id":disposition_id,"duplicate":False,
+                "disposed_quantity":qty,"reason":reason,"total_cost":str(total),
+                "project_code":dispatch["project_code"],"currency":"CNY"})
 
     def receive(self, purchase_id: str, data: dict) -> None:
         qty = whole_quantity(data["quantity"], "receipt quantity")
