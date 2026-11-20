@@ -265,14 +265,18 @@ def source_rows(conn, file_id: str, offset: int = 0, limit: int = 100) -> dict |
 
 
 def archived_status(conn, file_ids: list[str]) -> set[str]:
+    """Fetch DB-backed originals in batches, avoiding one remote query per file."""
     if not file_ids:
         return set()
     result = set()
-    for file_id in file_ids:
-        row=conn.execute(
-            f"SELECT sha256 FROM {_table(conn,'original_documents')} WHERE sha256=?",
-            (file_id,),
-        ).fetchone()
-        if row:
-            result.add(file_id)
+    table = _table(conn, "original_documents")
+    unique = list(dict.fromkeys(file_ids))
+    for start in range(0, len(unique), 200):
+        chunk = unique[start:start+200]
+        placeholders = ",".join("?" for _ in chunk)
+        for row in conn.execute(
+            f"SELECT sha256 FROM {table} WHERE sha256 IN ({placeholders})",
+            tuple(chunk),
+        ):
+            result.add(row["sha256"])
     return result
