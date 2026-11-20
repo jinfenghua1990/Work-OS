@@ -139,10 +139,10 @@ class ImmutableRawEvidenceTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM evidence_import_batches").fetchone()[0],1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],0)
 
-    def test_v41_is_current_and_reentrant(self):
+    def test_current_schema_is_reentrant(self):
         server.init_db()
         with server.db() as conn:
-            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],41)
+            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],server.LATEST_SCHEMA_VERSION)
 
 
 if __name__=="__main__":
