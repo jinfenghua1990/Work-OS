@@ -1,0 +1,2 @@
+# Install this optional driver when running with PostgreSQL/Neon.
+psycopg[binary]>=3.2,<4

@@ -1,0 +1,10 @@
+*.tsbuildinfo
+dist/
+node_modules/
+.env
+.venv/
+__pycache__/
+backend/data/
+
+*.bak
+work/
