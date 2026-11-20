@@ -77,6 +77,51 @@ class OriginalArchiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"SHA-256"):
             original_archive.open_verified_file(meta["id"],row["storage_key"])
 
+    def test_invoice_registration_links_original(self):
+        data=b"%PDF-1.4 test invoice"
+        with server.db() as conn:
+            evidence=original_archive.ingest(conn,io.BytesIO(data),len(data),"202611.pdf","input_invoice","2026-11")
+        handler=server.Api.__new__(server.Api)
+        handler.reply=lambda code,payload:(code,payload)
+        payload={
+            "source_key":"invoice-no-0001", "invoice_number":"0001",
+            "direction":"purchase","counterparty":"测试供货商",
+            "issued_on":"2026-11-20","total_amount":"113.00",
+            "tax_amount":"13.00","currency":"CNY","exchange_rate":"1",
+            "archive_file_id":evidence["id"]
+        }
+        code,receipt=handler.create_invoice(payload)
+        self.assertEqual(code,201,receipt)
+        code,duplicate=handler.create_invoice(payload)
+        self.assertEqual(code,200,duplicate)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0],1)
+            linked=conn.execute("SELECT file_id,source_system,source_document_id FROM archive_links").fetchone()
+            self.assertEqual(linked["file_id"],evidence["id"])
+            self.assertEqual(linked["source_system"],"finance.invoice")
+            self.assertEqual(linked["source_document_id"],receipt["id"])
+
+    def test_bank_import_links_document_without_posting_expense(self):
+        data=b"date,account,reference,amount"
+        with server.db() as conn:
+            evidence=original_archive.ingest(conn,io.BytesIO(data),len(data),"bank.csv","bank","2026-11")
+        handler=server.Api.__new__(server.Api)
+        handler.reply=lambda code,payload:(code,payload)
+        row={"source_key":"bank:account:2026-11-20:ref1",
+             "transaction_on":"2026-11-20","account_name":"测试银行",
+             "bank_reference":"ref1","description":"收款",
+             "direction":"in","amount":"100.00","currency":"CNY"}
+        code,result=handler.import_bank({"archive_file_id":evidence["id"],"rows":[row]})
+        self.assertEqual(code,200,result)
+        self.assertEqual(len(result["created"]),1)
+        code,again=handler.import_bank({"archive_file_id":evidence["id"],"rows":[row]})
+        self.assertEqual(code,200,again)
+        self.assertEqual(len(again["duplicates"]),1)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM bank_transactions").fetchone()[0],1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM archive_links").fetchone()[0],1)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],0)
+
     def test_legacy_database_migration_is_repeatable(self):
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],37)
