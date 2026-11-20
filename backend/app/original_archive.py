@@ -1,6 +1,6 @@
 """Private, content-addressed archive for original source documents.
 
-Local/NAS filesystem backend. The database stores metadata, not file contents.
+Local/NAS backup plus cloud R2 primary original file storage (PostgreSQL).
 This is an offline-development implementation, NOT a compliant WORM archive
 or a remotely accessible service: the API must remain bound to loopback until
 authentication and authorization are implemented.
@@ -17,6 +17,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import evidence_db
+import r2_evidence
 
 ALLOWED_EXTENSIONS = {".csv", ".xls", ".xlsx", ".pdf", ".ofd", ".xml", ".txt", ".zip"}
 CATEGORIES = {"bank", "input_invoice", "output_invoice", "sales", "purchase", "expense", "contract", "other"}
@@ -120,9 +121,10 @@ def ingest(conn, stream, size: int, filename: str, category: str, period: str, s
             "VALUES (?,?,?,?,?,?,?)",
             (upload_id, hex_digest, filename, category, period, source_system, stamp),
         )
-        # Exactly the same original bytes are copied into the isolated SQL
-        # evidence area. The business record is not posted until this succeeds.
-        evidence=evidence_db.store(
+        # The exact original is verified in R2 before metadata can commit.
+        # Local SQLite keeps the legacy database original as its offline mode.
+        persist=r2_evidence.store if r2_evidence.mode(conn)=="r2" else evidence_db.store
+        evidence=persist(
             conn,hex_digest,dest.read_bytes(),upload_id,
             filename,category,period,source_system,
         )
