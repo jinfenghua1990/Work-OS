@@ -1215,8 +1215,9 @@ class Api(BaseHTTPRequestHandler):
                 bike_receipts=sum((Decimal(row[0]) for row in conn.execute("SELECT contract_cost_cny FROM bike_receipts WHERE received_on<=?",(as_of,))),Decimal(0))
                 bike_costs=sum((Decimal(row[0]) for row in conn.execute("SELECT base_amount_cny FROM bike_landed_costs WHERE incurred_on<=? AND cost_treatment='capitalized'",(as_of,))),Decimal(0))
                 bike_cogs=sum((Decimal(row[0]) for row in conn.execute("SELECT cogs_cny FROM bike_sales WHERE sold_on<=?",(as_of,))),Decimal(0))
-                inventory_subledger=(coffee_value+bike_receipts+bike_costs-bike_cogs).quantize(CENT)
-                inventory_gl=sum((balances.get(code,[Decimal(0),Decimal(0)])[0]-balances.get(code,[Decimal(0),Decimal(0)])[1] for code in ("inventory","inventory:bike")),Decimal(0)).quantize(CENT)
+                outside_samples=exhibition_assets.outstanding_asset_value(conn,as_of)
+                inventory_subledger=(coffee_value+outside_samples+bike_receipts+bike_costs-bike_cogs).quantize(CENT)
+                inventory_gl=sum((balances.get(code,[Decimal(0),Decimal(0)])[0]-balances.get(code,[Decimal(0),Decimal(0)])[1] for code in ("inventory","inventory:bike","inventory:exhibition")),Decimal(0)).quantize(CENT)
                 inventory_difference=(inventory_gl-inventory_subledger).quantize(CENT)
                 has_balance_basis=bool(balances) or conn.execute("SELECT 1 FROM opening_balance_imports LIMIT 1").fetchone() is not None
                 subledgers_reconciled=has_balance_basis and not (untraceable_items or unvalued_items or unvalued_settlements or unvalued_inventory) and abs(ar_difference)<=CENT and abs(ap_difference)<=CENT and abs(inventory_difference)<=CENT
@@ -1291,7 +1292,11 @@ class Api(BaseHTTPRequestHandler):
                 dispatches = []
                 for row in rows:
                     returned = sum((Decimal(item[0]) for item in conn.execute("SELECT total_cost FROM sample_returns WHERE dispatch_id=?", (row["id"],))), Decimal(0))
-                    dispatches.append({**dict(row),"returned_cost":str(returned.quantize(CENT)),"outstanding_quantity":row["quantity"]-row["returned_quantity"],"outstanding_cost":str((Decimal(row["total_cost"])-returned).quantize(CENT))})
+                    disposed = sum((Decimal(item[0]) for item in conn.execute("SELECT total_cost FROM sample_dispositions WHERE dispatch_id=?", (row["id"],))), Decimal(0))
+                    dispatches.append({**dict(row),"returned_cost":str(returned.quantize(CENT)),
+                        "disposed_cost":str(disposed.quantize(CENT)),
+                        "outstanding_quantity":row["quantity"]-row["returned_quantity"]-row["disposed_quantity"],
+                        "outstanding_cost":str((Decimal(row["total_cost"])-returned-disposed).quantize(CENT))})
                 return self.reply(200, dispatches)
             if path == "/api/bike/orders":
                 orders = []
@@ -1643,6 +1648,8 @@ class Api(BaseHTTPRequestHandler):
                 return self.dispatch_sample(data)
             if path == "/api/projects/samples/return":
                 return self.return_sample(data)
+            if path == "/api/projects/samples/dispose":
+                return self.dispose_sample(data)
             if path == "/api/bike/orders":
                 return self.create_bike_order(data)
             if path == "/api/bike/receipts":
@@ -2429,7 +2436,7 @@ class Api(BaseHTTPRequestHandler):
             if per_unit > 0 and not included and self.inventory_currency(conn, str(packaging_sku)) != "CNY":
                 raise ValueError("sample packaging must use CNY inventory")
             dispatch_id = str(uuid4())
-            conn.execute("INSERT INTO sample_dispatches (id,source_key,project_code,sku,quantity,returned_quantity,packaging_sku,packaging_per_unit,packaging_included,dispatched_on,total_cost,currency,created_at) VALUES(?,?,?,?,?,0,?,?,?,?, '0.00','CNY',?)", (dispatch_id, source_key, project_code, sku, qty, packaging_sku, per_unit, int(included), day, now()))
+            conn.execute("INSERT INTO sample_dispatches (id,source_key,project_code,sku,quantity,returned_quantity,packaging_sku,packaging_per_unit,packaging_included,dispatched_on,total_cost,currency,created_at,accounting_treatment) VALUES(?,?,?,?,?,0,?,?,?,?, '0.00','CNY',?,?)", (dispatch_id, source_key, project_code, sku, qty, packaging_sku, per_unit, int(included), day, now(),"asset_transfer"))
             item_layers: list[dict] = []
             total_cost = self.consume_fifo(conn, sku, qty, dispatch_id, day, layer_sink=item_layers, movement_type="sample_dispatch", source_type="exhibition_sample")
             package_layers: list[dict] = []
@@ -2440,7 +2447,7 @@ class Api(BaseHTTPRequestHandler):
                     conn.execute("INSERT INTO sample_dispatch_layers (id,dispatch_id,item_role,sku,stock_layer_id,quantity,returned_quantity,unit_cost,currency) VALUES(?,?,?,?,?,?,0,?,?)", (str(uuid4()), dispatch_id, role, layer["sku"], layer["stock_layer_id"], layer["quantity"], layer["unit_cost"], layer["currency"]))
             total_cost = total_cost.quantize(CENT)
             conn.execute("UPDATE sample_dispatches SET total_cost=? WHERE id=?", (str(total_cost), dispatch_id))
-            journal(conn, "exhibition_sample", dispatch_id, day, [("operating_expense:sample_cost", total_cost, Decimal(0)), ("inventory", Decimal(0), total_cost)], "exhibition", project["entity_code"], project_code)
+            journal(conn, "exhibition_sample", dispatch_id, day, [("inventory:exhibition", total_cost, Decimal(0)), ("inventory", Decimal(0), total_cost)], "coffee", project["entity_code"], project_code)
             return self.reply(201, {"id":dispatch_id,"duplicate":False,"project_code":project_code,"sku":sku,"quantity":qty,"cost":str(total_cost),"currency":"CNY"})
 
     def return_sample(self, data: dict) -> None:
@@ -2460,7 +2467,7 @@ class Api(BaseHTTPRequestHandler):
             dispatch = conn.execute("SELECT * FROM sample_dispatches WHERE id=?", (dispatch_id,)).fetchone()
             if not dispatch:
                 raise ValueError("sample dispatch not found")
-            if dispatch["returned_quantity"] + qty > dispatch["quantity"]:
+            if dispatch["returned_quantity"] + dispatch["disposed_quantity"] + qty > dispatch["quantity"]:
                 raise ValueError("returned sample quantity exceeds the outstanding dispatched quantity")
             project = conn.execute("SELECT entity_code FROM projects WHERE code=?", (dispatch["project_code"],)).fetchone()
             return_id = str(uuid4())
@@ -2470,15 +2477,15 @@ class Api(BaseHTTPRequestHandler):
             if dispatch["packaging_per_unit"] > 0 and not dispatch["packaging_included"]:
                 role_quantities["packaging"] = qty * dispatch["packaging_per_unit"]
             for role, required in role_quantities.items():
-                layers = conn.execute("SELECT * FROM sample_dispatch_layers WHERE dispatch_id=? AND item_role=? AND returned_quantity<quantity ORDER BY rowid", (dispatch_id, role)).fetchall()
-                available = sum(layer["quantity"]-layer["returned_quantity"] for layer in layers)
+                layers = conn.execute("SELECT l.* FROM sample_dispatch_layers l JOIN stock_layers s ON s.id=l.stock_layer_id WHERE l.dispatch_id=? AND l.item_role=? AND l.returned_quantity+l.disposed_quantity<l.quantity ORDER BY s.created_at,s.id", (dispatch_id, role)).fetchall()
+                available = sum(layer["quantity"]-layer["returned_quantity"]-layer["disposed_quantity"] for layer in layers)
                 if available < required:
                     raise ValueError("sample return layer history is incomplete; inventory was not restored")
                 remaining = required
                 for layer in layers:
                     if not remaining:
                         break
-                    take = min(remaining, layer["quantity"]-layer["returned_quantity"])
+                    take = min(remaining, layer["quantity"]-layer["returned_quantity"]-layer["disposed_quantity"])
                     rate_row=conn.execute("SELECT COALESCE(p.exchange_rate,s.exchange_rate) AS exchange_rate FROM stock_layers s LEFT JOIN purchases p ON p.id=s.purchase_id WHERE s.id=?",(layer["stock_layer_id"],)).fetchone()
                     exchange=Decimal(rate_row["exchange_rate"]) if rate_row else Decimal(1)
                     cost = Decimal(layer["unit_cost"]) * take * exchange
@@ -2491,7 +2498,9 @@ class Api(BaseHTTPRequestHandler):
             restored_cost = restored_cost.quantize(CENT)
             conn.execute("UPDATE sample_dispatches SET returned_quantity=returned_quantity+? WHERE id=?", (qty, dispatch_id))
             conn.execute("UPDATE sample_returns SET total_cost=? WHERE id=?", (str(restored_cost), return_id))
-            journal(conn, "exhibition_sample_return", return_id, day, [("inventory", restored_cost, Decimal(0)), ("operating_expense:sample_cost", Decimal(0), restored_cost)], "exhibition", project["entity_code"], dispatch["project_code"])
+            reverse_account="inventory:exhibition" if dispatch["accounting_treatment"]=="asset_transfer" else "operating_expense:sample_cost"
+            line_business="coffee" if dispatch["accounting_treatment"]=="asset_transfer" else "exhibition"
+            journal(conn, "exhibition_sample_return", return_id, day, [("inventory", restored_cost, Decimal(0)), (reverse_account, Decimal(0), restored_cost)], line_business, project["entity_code"], dispatch["project_code"])
             return self.reply(201, {"id":return_id,"duplicate":False,"dispatch_id":dispatch_id,"returned_quantity":qty,"restored_cost":str(restored_cost),"currency":"CNY"})
 
     def receive(self, purchase_id: str, data: dict) -> None:
