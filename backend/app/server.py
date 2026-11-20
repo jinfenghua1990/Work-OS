@@ -3037,6 +3037,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,response)
 
     def create_invoice(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         key = str(data.get("source_key", "")).strip()
         source_system = str(data.get("source_system", "")).strip()
         source_document_id = str(data.get("source_document_id", "")).strip()
@@ -3064,10 +3065,14 @@ class Api(BaseHTTPRequestHandler):
             if existing:
                 if any(str(existing[name] if existing[name] is not None else "") != str(value if value is not None else "") for name, value in payload.items()):
                     raise ValueError("external invoice source is already recorded with a different payload; reconcile the source record")
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"finance.invoice",existing["id"])
                 return self.reply(200, {"id": existing["id"], "invoice_number": existing["invoice_number"], "duplicate": True, "internal_status": "recorded", "tax_status": existing["tax_status"], "tax_credit_recognized": False})
             ensure_open(conn, day)
             invoice_id = str(uuid4())
             conn.execute("INSERT INTO invoices (id,invoice_number,direction,counterparty,issued_on,total_amount,tax_amount,currency,source_key,tax_status,tax_evidence_ref,exchange_rate,rate_date,created_at,source_system,source_document_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (invoice_id, number, direction, party, day, str(total), str(tax), currency, key, "pending", None, str(rate), rate_date, now(), source_system, source_document_id))
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"finance.invoice",invoice_id)
             return self.reply(201, {"id": invoice_id, "invoice_number": number, "internal_status": "recorded", "tax_status": "pending", "tax_credit_recognized": False, "source_system": source_system or None, "source_document_id": source_document_id or None})
 
     def link_invoice(self, data: dict) -> None:
