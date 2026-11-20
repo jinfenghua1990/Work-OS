@@ -1278,7 +1278,14 @@ class Api(BaseHTTPRequestHandler):
                     traceable=bool(product["n"] and int(product["quantity"])==int(line["quantity"]) and not product["missing_layers"] and not product["missing_cost"] and line["cogs_cny"] is not None)
                     if package:
                         traceable=traceable and int(package["quantity"])==expected_package and not package["missing_layers"] and not package["missing_cost"]
-                    result.append({**dict(line),"returned_quantity":returned["quantity"],"returned_packaging_quantity":returned["packaging_quantity"],"returnable":traceable,"return_trace_note":None if traceable else "原销售行未保存完整的 FIFO 库存层成本关联，不能自动退货"})
+                    refunded=conn.execute("SELECT COALESCE(SUM(CAST(amount_cny AS REAL)),0) FROM sales_refunds WHERE sale_line_id=?",(line["id"],)).fetchone()[0]
+                    refundable=coffee_refund_only.remaining_revenue(conn,line)
+                    result.append({**dict(line),"returned_quantity":returned["quantity"],
+                        "returned_packaging_quantity":returned["packaging_quantity"],
+                        "refunded_amount_cny":str(amount(refunded,"refunded_amount")),
+                        "remaining_refundable_cny":str(refundable),
+                        "returnable":traceable,
+                        "return_trace_note":None if traceable else "原销售行未保存完整的 FIFO 库存层成本关联，不能自动退货"})
                 return self.reply(200,result)
             if path == "/api/sales/imports":
                 rows = conn.execute("SELECT * FROM sales_imports ORDER BY created_at DESC").fetchall()
@@ -1632,6 +1639,8 @@ class Api(BaseHTTPRequestHandler):
                 return self.edit_purchase_receipt(path.split("/")[3],data)
             if path.startswith("/api/sales/lines/") and path.endswith("/return"):
                 return self.return_sale_line(path.split("/")[4],data)
+            if path.startswith("/api/sales/lines/") and path.endswith("/refund"):
+                return self.refund_sale_line(path.split("/")[4],data)
             if path == "/api/sales/import":
                 return self.import_sale(data)
             if path == "/api/sales/import-row":
@@ -2964,6 +2973,8 @@ class Api(BaseHTTPRequestHandler):
         if not source_key or quantity<=0 or package_quantity<0:raise ValueError("stable source_key, positive returned product quantity, and non-negative packaging quantity are required")
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM sales_refunds WHERE source_key=?",(source_key,)).fetchone():
+                raise ValueError("source_key already identifies a refund-only event; use a new reference for physical returns")
             prior=conn.execute("SELECT * FROM sales_returns WHERE source_key=?",(source_key,)).fetchone()
             if prior:
                 require_same_source_payload(prior,{"sale_line_id":sale_line_id,"quantity":quantity,"packaging_quantity":package_quantity,"returned_on":returned_on})
@@ -2977,7 +2988,11 @@ class Api(BaseHTTPRequestHandler):
             package_per=int(line["packaging_per_unit"]);package_cap=0 if line["packaging_included"] else quantity*package_per
             if package_quantity>package_cap:raise ValueError(f"returned packaging quantity cannot exceed {package_cap}")
             expected_package=int(line["quantity"])*package_per if not line["packaging_included"] else 0
-            returned_revenue=(Decimal(line["unit_price"])*quantity).quantize(CENT,rounding=ROUND_HALF_UP)
+            # The customer may have received an earlier refund-only adjustment.
+            # Physical return restores FIFO stock but must not reverse revenue
+            # already reversed by that financial-only refund.
+            would_reverse=(Decimal(line["unit_price"])*quantity).quantize(CENT,rounding=ROUND_HALF_UP)
+            returned_revenue=min(would_reverse,coffee_refund_only.remaining_revenue(conn,line))
             ar=conn.execute("SELECT * FROM receivables_payables WHERE direction='receivable' AND source_id=? AND source_type IN ('sale','legacy_sale') ORDER BY created_at LIMIT 1",(line["import_id"],)).fetchone()
             fx=conn.execute("SELECT * FROM open_item_fx WHERE item_id=?",(ar["id"],)).fetchone() if ar else None
             if not ar or not fx:raise ValueError("sale receivable cannot be traced; return requires finance review")
