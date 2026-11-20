@@ -1988,6 +1988,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"id":cost_id,"source_key":source_key,"amount":str(value),"currency":currency,"base_amount_cny":str(base),"cost_type":cost_type,"cost_treatment":treatment,"capitalized":treatment=="capitalized","payable_id":posted_payable})
 
     def import_bike_sale(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         source_key=str(data.get("source_key", "")).strip()
         order_no=str(data.get("alsvid_order_no", "")).strip()
         source=str(data.get("source", "")).strip()
@@ -2018,6 +2019,8 @@ class Api(BaseHTTPRequestHandler):
             if duplicate:
                 order=conn.execute("SELECT id FROM bike_orders WHERE alsvid_order_no=?",(order_no,)).fetchone()
                 require_same_source_payload(duplicate,{"bike_order_id":order["id"] if order else "","source":source,"external_order_no":external_order_no,"sold_on":sold_on,"channel":channel,"quantity":quantity,"currency":currency,"net_revenue":revenue,"exchange_rate":rate,"rate_date":rate_date})
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"bike.sale",duplicate["id"])
                 return self.reply(200,{"id":duplicate["id"],"duplicate":True,"posting_status":"posted"})
             ensure_open(conn,sold_on)
             order=conn.execute("SELECT * FROM bike_orders WHERE alsvid_order_no=?",(order_no,)).fetchone()
@@ -2041,6 +2044,8 @@ class Api(BaseHTTPRequestHandler):
             receivable_id=str(uuid4())
             conn.execute("INSERT INTO receivables_payables VALUES(?,?,?,?,?,?, '0.00',?,NULL,?)",(receivable_id,"receivable","bike_sale",sale_id,channel,str(revenue),currency,now()))
             record_open_item_fx(conn,receivable_id,revenue_cny,rate,rate_date,"bike_sales_import")
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"bike.sale",sale_id)
             return self.reply(201,{"id":sale_id,"source_key":source_key,"quantity":quantity,"revenue_cny":str(revenue_cny),"unit_landed_cost_cny":str(unit_cost),"cogs_cny":str(cogs),"gross_margin_cny":str((revenue_cny-cogs).quantize(CENT)),"posting_status":"posted"})
 
     def receive_bike_order(self, data: dict) -> None:
