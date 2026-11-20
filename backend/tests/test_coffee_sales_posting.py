@@ -58,7 +58,7 @@ class CoffeeSalesPostingTests(unittest.TestCase):
 
     def test_filename_change_does_not_duplicate_inventory_or_journal(self):
         first_status, first = self.handler.import_sale_row(self.sale_payload())
-        self.assertEqual(first_status, 201)
+        self.assertEqual(first_status, 201, first)
         self.assertEqual(first["result"]["revenue"], "200.00")
         self.assertEqual(first["result"]["cost_of_goods_sold"], "120.00")
         self.assertEqual(first["result"]["gross_profit"], "80.00")
@@ -72,7 +72,8 @@ class CoffeeSalesPostingTests(unittest.TestCase):
             self.assertEqual(count, 1)
 
     def test_same_order_changed_price_requires_review(self):
-        self.handler.import_sale_row(self.sale_payload())
+        first_status, first = self.handler.import_sale_row(self.sale_payload())
+        self.assertEqual(first_status, 201, first)
         with self.assertRaisesRegex(ValueError, "different business data"):
             self.handler.import_sale_row(self.sale_payload("second-file.csv", price="21"))
         with server.db() as conn:
@@ -86,7 +87,7 @@ class CoffeeSalesPostingTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT SUM(remaining_qty) FROM stock_layers WHERE sku='COFFEE-01'").fetchone()[0], 100)
 
     def test_new_order_with_same_line_number_is_distinct(self):
-        self.assertEqual(self.handler.import_sale_row(self.sale_payload())[0], 201)
+        self.assertEqual(self.handler.import_sale_row(self.sale_payload())[0], 201, 'first sale should post')
         self.assertEqual(self.handler.import_sale_row(self.sale_payload("other.csv", order="ORDER-002"))[0], 201)
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries WHERE source_type='sale'").fetchone()[0], 2)
