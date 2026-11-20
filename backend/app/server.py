@@ -16,6 +16,7 @@ from urllib.parse import unquote
 
 import original_archive
 import local_auth
+import xlsx_reader
 from coffee_stock_cover import stock_cover
 
 from coffee_source_identity import normalize_sale_source
@@ -1546,6 +1547,13 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(200,{"authenticated":False},
                               cookie=local_auth.clear_cookie())
         try:
+            if path == "/api/import/preview-xlsx":
+                raw_length=self.headers.get("Content-Length","")
+                if not raw_length.isdigit() or not 0<int(raw_length)<=xlsx_reader.XLSX_BYTES_LIMIT:
+                    raise ValueError("Excel file must be non-empty and no larger than 20 MiB")
+                rows=xlsx_reader.first_sheet_rows(self.rfile.read(int(raw_length)))
+                return self.reply(200,{"rows":rows,"sheet":"first","count":len(rows)-1,
+                    "archived":False,"note":"preview only; original must be archived before posting"})
             if path == "/api/archive/files":
                 return self.upload_original_document()
             data = self.body()
