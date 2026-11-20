@@ -15,6 +15,7 @@ from uuid import uuid4
 from urllib.parse import unquote
 
 import original_archive
+from coffee_stock_cover import stock_cover
 
 from coffee_source_identity import normalize_sale_source
 
@@ -1063,6 +1064,8 @@ class Api(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
         with db() as conn:
+            if path == "/api/coffee/stock-cover":
+                return self.reply(200,stock_cover(conn))
             if path == "/api/archive/files":
                 rows=conn.execute(
                     "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
