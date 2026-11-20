@@ -82,9 +82,21 @@ def audit_evidence(conn) -> dict:
         "SELECT COUNT(*) FROM archive_files f "
         "WHERE NOT EXISTS (SELECT 1 FROM archive_links l WHERE l.file_id=f.id)"
     ).fetchone()[0])
+    # Historic financial transactions may predate the archive subsystem.
+    # Report them as unlinked records, never as evidence of lost originals.
+    unlinked_business: dict[str,int] = {}
+    for source,(table,column) in BUSINESS_SOURCES.items():
+        missing_count=int(conn.execute(
+            f"SELECT COUNT(*) FROM {table} b WHERE NOT EXISTS ("
+            "SELECT 1 FROM archive_links l "
+            f"WHERE l.source_system=? AND l.source_document_id=b.{column})",
+            (source,)
+        ).fetchone()[0])
+        unlinked_business[source]=missing_count
+    unlinked_total=sum(unlinked_business.values())
     complete = file_total<=MAX_FILES and link_total<=MAX_LINKS
     status = ("partial" if not complete else
-              "needs_attention" if missing or corrupted or broken_links else "passed")
+              "needs_attention" if missing or corrupted or broken_links or unlinked_total else "passed")
     return {
         "checked_at":datetime.now(timezone.utc).isoformat(),
         "status":status,
@@ -98,7 +110,10 @@ def audit_evidence(conn) -> dict:
         "corrupted_files":corrupted,
         "broken_business_links":broken_links,
         "files_without_business_links":without_link,
+        "business_records_without_evidence":unlinked_total,
+        "business_without_evidence_by_type":unlinked_business,
         "issues":issues,
-        "note":"只检查当前档案目录与数据库索引；未关联原件可能是合法待处理文件。"
+        "note":"只核对当前档案目录与数据库索引；未关联业务的原件可能是待处理文件，"
+               "未关联原件的历史业务记录可能早于本功能上线，并不代表原件丢失。"
                "未验证银行/税局真实性、独立备份或电子会计档案合规。",
     }
