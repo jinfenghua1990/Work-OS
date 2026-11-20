@@ -12,6 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
+from urllib.parse import unquote
+
+import original_archive
 
 from coffee_source_identity import normalize_sale_source
 
@@ -42,7 +45,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 36
+LATEST_SCHEMA_VERSION = 37
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -254,6 +257,13 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version) == 36:
+                    conn.execute("BEGIN")
+                    original_archive.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version) in (32,33,34,35):
                     conn.execute("BEGIN")
                     if int(version)==32:
@@ -274,6 +284,8 @@ def init_db() -> None:
                     conn.execute("UPDATE stock_layers SET currency=COALESCE((SELECT currency FROM purchases WHERE purchases.id=stock_layers.purchase_id),currency)")
                     conn.execute("UPDATE stock_layers SET exchange_rate=COALESCE((SELECT exchange_rate FROM purchases WHERE purchases.id=stock_layers.purchase_id),exchange_rate)")
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(36,?)", (datetime.now(timezone.utc).isoformat(),))
+                    original_archive.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -797,6 +809,8 @@ def init_db() -> None:
             if column not in layer_columns:conn.execute(f"ALTER TABLE stock_layers ADD COLUMN {column} {declaration}")
         conn.execute("UPDATE stock_layers SET currency=COALESCE((SELECT currency FROM purchases WHERE purchases.id=stock_layers.purchase_id),currency)")
         conn.execute("UPDATE stock_layers SET exchange_rate=COALESCE((SELECT exchange_rate FROM purchases WHERE purchases.id=stock_layers.purchase_id),exchange_rate)")
+        original_archive.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(37,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1024,6 +1038,45 @@ class Api(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
         with db() as conn:
+            if path == "/api/archive/files":
+                rows=conn.execute(
+                    "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
+                    "FROM archive_files f JOIN archive_uploads u ON u.file_id=f.id "
+                    "ORDER BY u.uploaded_at DESC LIMIT 500"
+                ).fetchall()
+                return self.reply(200,[dict(row) for row in rows])
+            if path == "/api/archive/links":
+                source=parse_qs(parsed.query).get("source_system",[""])[0]
+                source_id=parse_qs(parsed.query).get("source_document_id",[""])[0]
+                if not source or not source_id:
+                    return self.reply(422,{"error":"source_system and source_document_id required"})
+                rows=conn.execute(
+                    "SELECT l.file_id,l.linked_at,f.size_bytes,u.original_name "
+                    "FROM archive_links l JOIN archive_files f ON f.id=l.file_id "
+                    "JOIN archive_uploads u ON u.file_id=f.id "
+                    "WHERE l.source_system=? AND l.source_document_id=? "
+                    "GROUP BY l.file_id,l.linked_at,f.size_bytes,u.original_name",
+                    (source,source_id)).fetchall()
+                return self.reply(200,[dict(row) for row in rows])
+            if path.startswith("/api/archive/files/") and path.endswith("/download"):
+                file_id=path.split("/")[4]
+                metadata=original_archive.fetch_file_metadata(conn,file_id)
+                if not metadata: return self.reply(404,{"error":"archive file not found"})
+                try:
+                    archive_path=original_archive.open_verified_file(file_id, metadata["storage_key"])
+                except (ValueError,OSError) as exc:
+                    return self.reply(422,{"error":str(exc)})
+                self.send_response(200)
+                self.send_header("Content-Type","application/octet-stream")
+                self.send_header("Content-Disposition",original_archive.download_disposition(metadata["original_name"]))
+                self.send_header("Content-Length",str(metadata["size_bytes"]))
+                self.send_header("Cache-Control","no-store")
+                self.send_header("X-Content-Type-Options","nosniff")
+                self.end_headers()
+                with archive_path.open("rb") as original:
+                    while chunk:=original.read(1024*1024):
+                        self.wfile.write(chunk)
+                return
             if path == "/api/accounts":
                 rows=conn.execute("SELECT account_code,account_name,account_type,normal_side,statement,active FROM chart_of_accounts ORDER BY account_code").fetchall()
                 return self.reply(200,[dict(row) for row in rows])
@@ -1414,7 +1467,16 @@ class Api(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         try:
+            if path == "/api/archive/files":
+                return self.upload_original_document()
             data = self.body()
+            if path == "/api/archive/links":
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    result=original_archive.link_document(
+                        conn,str(data.get("file_id","")),str(data.get("source_system","")),
+                        str(data.get("source_document_id","")))
+                return self.reply(200 if result["duplicate"] else 201,result)
             if path == "/api/purchases":
                 return self.create_purchase(data)
             if path.startswith("/api/purchases/") and path.endswith("/receive"):
@@ -1500,6 +1562,23 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(409, {"error": str(exc)})
         except DB_ERRORS as exc:
             return self.reply(500, {"error": "database error", "detail": str(exc)})
+
+    def upload_original_document(self) -> None:
+        # Binary streaming rather than JSON/base64 avoids blowing up memory for
+        # the larger monthly source files. Only safe on a loopback-only API.
+        raw_length=self.headers.get("Content-Length","")
+        if not raw_length.isdigit():
+            raise ValueError("Content-Length must be a positive integer")
+        length=int(raw_length)
+        filename=unquote(self.headers.get("X-File-Name",""))
+        category=self.headers.get("X-Document-Category","")
+        period=self.headers.get("X-Document-Period","")
+        source_system=self.headers.get("X-Source-System","")
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=original_archive.ingest(
+                conn,self.rfile,length,filename,category,period,source_system)
+        return self.reply(201,result)
 
     def import_opening_balances(self, data: dict) -> None:
         as_of=str(data.get("as_of",""))
@@ -1603,6 +1682,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"journal_entry_id":entry["id"],"status":"posted","debit_total":str(debit_total),"credit_total":str(credit_total),"line_count":len(lines)})
 
     def create_purchase(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         number = str(data["number"]).strip()
         supplier = str(data["supplier"]).strip()
         sku = str(data["sku"]).strip()
@@ -1638,6 +1718,8 @@ class Api(BaseHTTPRequestHandler):
                 if not project or project["entity_code"] != entity_code:
                     raise ValueError("project code must exist and match the selected legal entity")
             conn.execute("INSERT INTO purchases (id,number,supplier,sku,item_type,ordered_qty,unit_cost,received_qty,currency,exchange_rate,rate_date,created_at,business_line,entity_code,project_code,document_amount) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)", (pid, number, supplier, sku, item_type, qty, str(cost), currency, str(rate), rate_date, now(), business_line, entity_code, project_code, str(document_amount)))
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"coffee.purchase",pid)
             return self.reply(201, {"id": pid, "number": number, "status": "open", "ordered_quantity": qty, "document_amount": str(document_amount)})
 
     def save_packaging_rule(self, data: dict) -> None:
@@ -2437,6 +2519,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,{"import_id":import_id,"duplicate":False,"lines":summary,"revenue":str(revenue),"cost_of_goods_sold":str(cogs),"gross_profit":str(revenue-cogs)})
 
     def import_sale_row(self, data: dict) -> None:
+        archive_id = str(data.get("archive_file_id") or "").strip()
         # Files are upload carriers, not business identities. A renamed or
         # re-exported CSV must not post the same marketplace sale twice.
         identity = normalize_sale_source(data)
@@ -2467,6 +2550,8 @@ class Api(BaseHTTPRequestHandler):
                 recorded={"source":posted["source"],"sold_on":posted["sold_on"],"business_line":posted["business_line"],"entity_code":posted["entity_code"],"project_code":posted["project_code"],"sku":posted["sku"],"quantity":int(posted["quantity"]),"unit_price":str(amount(posted["unit_price"],"recorded unit_price")),"channel":posted["channel"] or "","customer":posted["counterparty"] or "未指定客户"}
                 if submitted!=recorded:
                     raise ValueError("source row is already posted with different business data; reconcile it with a sales return or reviewed correction")
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"coffee.sale",row_key)
                 return self.reply(200, {"duplicate": True, "status": "posted", "result": json.loads(prior["result"])})
             if prior:
                 conn.execute("DELETE FROM import_rows WHERE source_key=?", (row_key,))
@@ -2474,6 +2559,8 @@ class Api(BaseHTTPRequestHandler):
             try:
                 payload = {"source": data.get("source", "file_import"), "sold_on": data.get("sold_on", date.today().isoformat()), "sku": data["sku"], "quantity": data["quantity"], "unit_price": data["unit_price"], "channel": str(data.get("channel", "")).strip(), "business_line": data.get("business_line", "coffee"), "entity_code": data.get("entity_code", "main"), "project_code": data.get("project_code"), "customer": data.get("customer", "未指定客户")}
                 result = self.post_sale(conn, payload, row_key)
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"coffee.sale",row_key)
                 conn.execute("INSERT INTO import_rows VALUES(?,?,?,?,?,?)", (str(uuid4()), row_key, json.dumps(data, ensure_ascii=False), "posted", json.dumps(result, ensure_ascii=False), now()))
                 conn.execute("RELEASE SAVEPOINT import_row")
                 return self.reply(201, {"duplicate": False, "status": "posted", "result": result})
@@ -2753,6 +2840,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(200,{"bank_account_id":account_id,"period":period,"currency":account["currency"],"imported_inflow":str(inflow.quantize(CENT)),"imported_outflow":str(outflow.quantize(CENT)),"difference":str(difference),"reconciled":difference==0,"status":"reconciled" if difference==0 else "difference_requires_review"})
 
     def import_bank(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         rows = data.get("rows")
         if not isinstance(rows, list) or not rows:
             raise ValueError("rows must contain at least one bank transaction")
@@ -2797,6 +2885,8 @@ class Api(BaseHTTPRequestHandler):
                     if existing:
                         if any(str(existing[name] if existing[name] is not None else "") != str(val if val is not None else "") for name, val in payload.items()):
                             raise ValueError("external bank source is already recorded with a different payload; reconcile the source record")
+                        if archive_id:
+                            original_archive.link_document(conn,archive_id,"finance.bank_transaction",existing["id"])
                         duplicates.append(key)
                         continue
                     bank_account = conn.execute("SELECT * FROM bank_accounts WHERE account_name=?", (account_name,)).fetchone()
@@ -2807,6 +2897,8 @@ class Api(BaseHTTPRequestHandler):
                     ensure_open(conn, day)
                     row_id = str(uuid4())
                     conn.execute("INSERT INTO bank_transactions (id,source_key,transaction_on,account_name,bank_reference,description,direction,amount,currency,created_at,exchange_rate,rate_date,rate_source,base_amount_cny,source_system,source_document_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (row_id, key, day, account_name, bank_reference, description, direction, str(value), currency, now(), str(rate), rate_date, rate_source, str(base_amount), source_system, source_document_id))
+                    if archive_id:
+                        original_archive.link_document(conn,archive_id,"finance.bank_transaction",row_id)
                     created.append({"source_key": key, "source_system": source_system or None, "source_document_id": source_document_id or None, "id": row_id})
                 except (ValueError, KeyError, TypeError) as exc:
                     rejected.append({"row": index, "source_key": row.get("source_key"), "error": str(exc)})
@@ -2948,6 +3040,7 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201,response)
 
     def create_invoice(self, data: dict) -> None:
+        archive_id=str(data.get("archive_file_id") or "").strip()
         key = str(data.get("source_key", "")).strip()
         source_system = str(data.get("source_system", "")).strip()
         source_document_id = str(data.get("source_document_id", "")).strip()
@@ -2975,10 +3068,14 @@ class Api(BaseHTTPRequestHandler):
             if existing:
                 if any(str(existing[name] if existing[name] is not None else "") != str(value if value is not None else "") for name, value in payload.items()):
                     raise ValueError("external invoice source is already recorded with a different payload; reconcile the source record")
+                if archive_id:
+                    original_archive.link_document(conn,archive_id,"finance.invoice",existing["id"])
                 return self.reply(200, {"id": existing["id"], "invoice_number": existing["invoice_number"], "duplicate": True, "internal_status": "recorded", "tax_status": existing["tax_status"], "tax_credit_recognized": False})
             ensure_open(conn, day)
             invoice_id = str(uuid4())
             conn.execute("INSERT INTO invoices (id,invoice_number,direction,counterparty,issued_on,total_amount,tax_amount,currency,source_key,tax_status,tax_evidence_ref,exchange_rate,rate_date,created_at,source_system,source_document_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (invoice_id, number, direction, party, day, str(total), str(tax), currency, key, "pending", None, str(rate), rate_date, now(), source_system, source_document_id))
+            if archive_id:
+                original_archive.link_document(conn,archive_id,"finance.invoice",invoice_id)
             return self.reply(201, {"id": invoice_id, "invoice_number": number, "internal_status": "recorded", "tax_status": "pending", "tax_credit_recognized": False, "source_system": source_system or None, "source_document_id": source_document_id or None})
 
     def link_invoice(self, data: dict) -> None:
