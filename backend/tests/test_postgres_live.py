@@ -46,6 +46,7 @@ class PostgresLiveTests(unittest.TestCase):
             result = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()
             self.assertEqual(result["version"], server.LATEST_SCHEMA_VERSION)
             self.assertEqual(server.LATEST_SCHEMA_VERSION, 39)
+            self.assertTrue(server.postgres_schema_status()["ready"])
             self.assertIsNotNone(
                 conn.execute("SELECT to_regclass('public.archive_files') AS name").fetchone()["name"]
             )
@@ -107,8 +108,16 @@ class PostgresLiveTests(unittest.TestCase):
         with server.db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("DELETE FROM schema_migrations WHERE version>35")
+        before = server.postgres_schema_status()
+        self.assertEqual(before["current_version"], 35)
+        self.assertFalse(before["ready"])
+        with self.assertRaisesRegex(RuntimeError, "refused automatic cloud database changes"):
+            server.require_database_ready()
+        # The real migration is invoked only explicitly in this disposable
+        # CI database. API startup must never trigger it on Neon production.
         server.init_db()
         server.init_db()
+        server.require_database_ready()
         with server.db() as conn:
             version = conn.execute(
                 "SELECT MAX(version) AS version FROM schema_migrations"
