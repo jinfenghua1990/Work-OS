@@ -3461,6 +3461,63 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201, {"period": period,"closed_at":closed_at, "status": "closed", "closed_by": actor,"journal_count":readiness["journal_count"],"reviewed_checks":sorted(required),"duplicate":False})
 
 
+def postgres_schema_status() -> dict:
+    """Read-only schema preflight for cloud PostgreSQL/Neon.
+
+    Never calls init_db(), DDL, UPDATE or INSERT. A schema version by itself
+    is not sufficient: all critical archival and accounting tables must exist.
+    """
+    if DB_BACKEND != "postgres":
+        raise RuntimeError("schema preflight only supports WORKOS_DB_BACKEND=postgres")
+    critical = (
+        "purchases", "stock_layers", "sales_imports",
+        "bank_transactions", "invoices", "journal_entries", "journal_lines",
+        "archive_files", "archive_links", "sample_dispositions",
+    )
+    with db() as conn:
+        exists=conn.execute(
+            "SELECT to_regclass('public.schema_migrations') AS table_name"
+        ).fetchone()["table_name"]
+        if exists is None:
+            current = 0
+        else:
+            current = conn.execute(
+                "SELECT COALESCE(MAX(version),0) AS version FROM public.schema_migrations"
+            ).fetchone()["version"]
+        missing = []
+        for table in critical:
+            row=conn.execute(
+                "SELECT to_regclass(?) AS table_name", (f"public.{table}",)
+            ).fetchone()
+            if row["table_name"] is None:
+                missing.append(table)
+    return {
+        "backend":"postgres",
+        "current_version":int(current),
+        "required_version":LATEST_SCHEMA_VERSION,
+        "missing_tables":missing,
+        "ready":int(current)==LATEST_SCHEMA_VERSION and not missing,
+        "read_only":True,
+    }
+
+
+def require_database_ready() -> None:
+    """Do not apply migrations to a cloud database just by starting the API."""
+    if DB_BACKEND == "sqlite":
+        init_db()
+        return
+    status = postgres_schema_status()
+    if not status["ready"]:
+        raise RuntimeError(
+            "PostgreSQL/Neon schema is not ready: "
+            f"current v{status['current_version']}, required v{status['required_version']}; "
+            f"missing tables: {', '.join(status['missing_tables']) or 'none'}. "
+            "Work OS refused automatic cloud database changes. "
+            "Run python backend/check_database.py, back up the database, "
+            "then apply and verify a reviewed migration on a separate branch."
+        )
+
+
 def main() -> None:
     host = os.environ.get("WORKOS_HOST", "127.0.0.1")
     local_auth.require_loopback_host(host)
@@ -3468,7 +3525,7 @@ def main() -> None:
         raise RuntimeError("invalid WORKOS_AUTH_PASSWORD_HASH")
     if not local_auth.enabled():
         print("WARNING: local password not configured; this API must remain on loopback.")
-    init_db()
+    require_database_ready()
     port = int(os.environ.get("WORKOS_PORT", "8103"))
     server = ThreadingHTTPServer((host, port), Api)
     database_label = f"SQLite: {DB_PATH}" if DB_BACKEND == "sqlite" else "PostgreSQL"
