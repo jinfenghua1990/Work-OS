@@ -127,6 +127,37 @@ class CoffeeRefundWithoutRestockTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM journal_entries WHERE source_type='sales_refund_only'"
             ).fetchone()[0],1)
 
+    def test_partly_collected_sale_creates_customer_refund_payable(self):
+        status,bank=self.api.import_bank({"rows":[{
+            "source_key":"BANK-PAID-001","account_name":"测试银行",
+            "bank_reference":"RECEIVED-001","transaction_on":"2026-11-05",
+            "description":"客户部分付款","direction":"in","amount":"150",
+            "currency":"CNY",
+        }]})
+        self.assertEqual(status,200,bank)
+        self.assertEqual(len(bank["created"]),1,bank)
+        status,allocation=self.api.allocate_bank({
+            "bank_transaction_id":bank["created"][0]["id"],
+            "allocations":[{"target_type":"receivable",
+                            "target_id":self.receivable,"amount":"150"}],
+        })
+        self.assertIn(status,(200,201),allocation)
+        status,refund=self.refund("REF-COLLECTED-001","100")
+        self.assertEqual(status,201,refund)
+        self.assertEqual(refund["ar_credit_cny"],"50.00")
+        self.assertEqual(refund["customer_refund_due_cny"],"50.00")
+        with server.db() as conn:
+            receivable=conn.execute("SELECT original_amount,settled_amount FROM receivables_payables WHERE id=?",
+                                     (self.receivable,)).fetchone()
+            self.assertEqual(Decimal(receivable["original_amount"]),Decimal("150.00"))
+            self.assertEqual(Decimal(receivable["settled_amount"]),Decimal("150.00"))
+            payable=conn.execute(
+                "SELECT original_amount FROM receivables_payables WHERE source_type='sales_refund_only'"
+            ).fetchone()
+            self.assertEqual(Decimal(payable["original_amount"]),Decimal("50.00"))
+            remaining=conn.execute("SELECT SUM(remaining_qty) FROM stock_layers WHERE sku='COFFEE-REFUND'").fetchone()[0]
+            self.assertEqual(remaining,10)
+
     def test_refund_key_cannot_be_used_as_physical_return(self):
         self.refund("REF-SHARED","10")
         with self.assertRaisesRegex(ValueError,"refund-only event"):
