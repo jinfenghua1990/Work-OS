@@ -124,10 +124,10 @@ class OriginalArchiveTests(unittest.TestCase):
 
     def test_legacy_database_migration_is_repeatable(self):
         with server.db() as conn:
-            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],37)
+            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],server.LATEST_SCHEMA_VERSION)
         server.init_db()
         with server.db() as conn:
-            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],37)
+            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],server.LATEST_SCHEMA_VERSION)
 
 
 if __name__ == "__main__":
