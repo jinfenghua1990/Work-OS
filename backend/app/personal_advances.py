@@ -153,6 +153,26 @@ def draft(conn,raw,now):
             if (earlier[field] if earlier[field] is not None else None)!=expected:
                 raise ValueError("personal payment source already recorded with conflicting data")
         return {"id":earlier["id"],"status":earlier["status"],"duplicate":True}
+    # A different CSV export or proof file must not create a second claim
+    # for the same actual personal card transfer. The business details must
+    # agree; conflicting details need explicit finance review.
+    previous=conn.execute(
+        "SELECT * FROM personal_advances WHERE claimant=? AND merchant=? "
+        "AND paid_on=? AND amount=? AND currency=? AND payment_reference=? "
+        "ORDER BY created_at LIMIT 2",
+        (claimant,merchant,paid_on,str(value),currency,reference),
+    ).fetchall()
+    if previous:
+        if len(previous)>1:
+            raise ValueError("multiple existing personal payment claims require manual reconciliation")
+        earlier=previous[0]
+        fields=("mode","category","existing_payable_id","business_line",
+                "entity_code","project_code","memo")
+        if any(earlier[field]!=normalized[field] for field in fields):
+            raise ValueError("personal payment already exists with conflicting business allocation")
+        from original_archive import link_document
+        link_document(conn,file_id,"finance.personal_advance",earlier["id"])
+        return {"id":earlier["id"],"status":earlier["status"],"duplicate":True}
     claim_id=str(uuid4())
     conn.execute(
         "INSERT INTO personal_advances "

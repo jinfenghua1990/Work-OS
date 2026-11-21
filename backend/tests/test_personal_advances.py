@@ -153,6 +153,36 @@ class PersonalAdvanceTests(unittest.TestCase):
             values["amount"]="100"
             self.api.create_personal_advance(values)
 
+    def test_identical_personal_payment_in_new_file_cannot_double_accrue(self):
+        status,first=self.api.create_personal_advance(self.data("first-import"))
+        self.assertEqual(status,201,first)
+        newer=b"another export of identical personal card payment"
+        with server.db() as conn:
+            new_proof=original_archive.ingest(
+                conn,io.BytesIO(newer),len(newer),
+                "personal-bank-export.csv","expense","2026-11",
+            )["id"]
+        copied=self.data("new-batch-other-source")
+        copied["archive_file_id"]=new_proof
+        status,result=self.api.create_personal_advance(copied)
+        self.assertEqual(status,200,result)
+        self.assertTrue(result["duplicate"])
+        self.assertEqual(first["id"],result["id"])
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM personal_advances"
+            ).fetchone()[0],1)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM archive_links WHERE source_system='finance.personal_advance'"
+            ).fetchone()[0],2)
+        conflict=self.data("different-category")
+        conflict["category"]="travel"
+        with self.assertRaisesRegex(ValueError,"conflicting business allocation"):
+            self.api.create_personal_advance(conflict)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM expenses").fetchone()[0],0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],0)
+
     def test_foreign_currency_or_missing_proof_does_not_post(self):
         value=self.data();value["currency"]="EUR"
         with self.assertRaisesRegex(ValueError,"CNY"):
