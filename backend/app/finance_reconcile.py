@@ -184,9 +184,7 @@ def monthly(conn,period:str)->dict:
 
     invoices=[dict(row) for row in conn.execute(
         "SELECT i.id,i.invoice_number,i.direction,i.counterparty,i.currency,"
-        "i.total_amount,i.tax_status,"
-        "COALESCE((SELECT SUM(CAST(l.linked_amount AS NUMERIC)) "
-        "FROM invoice_links l WHERE l.invoice_id=i.id),0) AS ignored_linked "
+        "i.total_amount,i.tax_status "
         "FROM invoices i WHERE i.issued_on LIKE ?",(period+"-%",),
     ).fetchall()]
     invoice_result={"total":len(invoices),"unlinked":0,"partially_linked":0,
