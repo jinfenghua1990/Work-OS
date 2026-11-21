@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"app"))
 import server
 import invoice_red
+import evidence_audit
 import original_archive
 import monthly_flow
 
@@ -77,6 +78,9 @@ class CreditNoteTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM invoice_credit_notes").fetchone()[0],1)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM archive_links WHERE source_system='finance.invoice.red'").fetchone()[0],1)
+            audit=evidence_audit.audit_evidence(conn)
+            self.assertEqual(audit["broken_business_links"],0,audit)
+            self.assertEqual(audit["business_without_evidence_by_type"]["finance.invoice.red"],0,audit)
             self.assertEqual(conn.execute("SELECT total_amount FROM invoices WHERE id=?",(self.blue_id,)).fetchone()[0],"100.00")
 
     def test_excessive_red_tax_and_conflicting_identity_rejected(self):
