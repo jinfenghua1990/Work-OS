@@ -1774,6 +1774,8 @@ class Api(BaseHTTPRequestHandler):
                 return self.import_invoices(data)
             if path == "/api/personal-advances":
                 return self.create_personal_advance(data)
+            if path == "/api/personal-advances/import":
+                return self.import_personal_advances(data)
             if path == "/api/personal-advances/approve":
                 return self.approve_personal_advance(data)
             if path == "/api/expenses":
@@ -2424,6 +2426,12 @@ class Api(BaseHTTPRequestHandler):
             result={"period":period,"coverage_confirmed":status["coverage_confirmed"],"complete":status["complete"]}
             save_expense_reconciliation_request(conn,action_key,"coverage",payload,result)
             return self.reply(201,result)
+
+    def import_personal_advances(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=personal_advances.import_drafts(conn,data,now)
+        return self.reply(200,result)
 
     def create_personal_advance(self,data:dict)->None:
         with db() as conn:
