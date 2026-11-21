@@ -180,6 +180,63 @@ class PostgresLiveTests(unittest.TestCase):
                 (sha,),
             ).fetchone()[0],1)
 
+    def test_personal_advance_and_reimbursement_liability_in_disposable_postgres(self):
+        """PostgreSQL must preserve the same payable transfer and no double cost."""
+        marker=uuid4().hex
+        raw=("personal-payment-only-test-"+marker).encode("utf-8")
+        sha=hashlib.sha256(raw).hexdigest()
+        with server.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO archive_files(id,sha256,size_bytes,storage_key,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (sha,sha,len(raw),sha[:2]+"/"+sha[2:4]+"/"+sha,server.now()),
+            )
+        api=server.Api.__new__(server.Api)
+        api.reply=lambda status,payload:(status,payload)
+        claim_data={
+            "source_key":"ci-personal-"+marker,"claimant":"测试垫付人",
+            "merchant":"PG Test Vendor","mode":"expense","paid_on":"2026-11-18",
+            "category":"software","amount":"35.00","currency":"CNY",
+            "business_line":"corporate","entity_code":"main",
+            "payment_reference":"TX-"+marker,"archive_file_id":sha,
+        }
+        status,claim=api.create_personal_advance(claim_data)
+        self.assertEqual(status,201,claim)
+        status,approved=api.approve_personal_advance({
+            "advance_id":claim["id"],"approved_by":"local-ci",
+            "accounting_on":"2026-11-18",
+        })
+        self.assertEqual(status,201,approved)
+        self.assertTrue(approved["vendor_payable_id"])
+        self.assertTrue(approved["employee_payable_id"])
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT settled_amount FROM receivables_payables WHERE id=?",
+                (approved["vendor_payable_id"],),
+            ).fetchone()[0],"35.00")
+            pending=conn.execute(
+                "SELECT counterparty,settled_amount FROM receivables_payables WHERE id=?",
+                (approved["employee_payable_id"],),
+            ).fetchone()
+            self.assertEqual(pending["counterparty"],"测试垫付人")
+            self.assertEqual(pending["settled_amount"],"0.00")
+            journal_count=conn.execute(
+                "SELECT COUNT(*) FROM journal_entries WHERE source_id=?",
+                (claim["id"],),
+            ).fetchone()[0]
+            self.assertEqual(journal_count,2)
+            links=conn.execute(
+                "SELECT COUNT(*) FROM archive_links WHERE source_system='finance.personal_advance' "
+                "AND source_document_id=?",(claim["id"],),
+            ).fetchone()[0]
+            self.assertEqual(links,1)
+        status,again=api.approve_personal_advance({
+            "advance_id":claim["id"],"approved_by":"local-ci"
+        })
+        self.assertEqual(status,200,again)
+        self.assertTrue(again["duplicate"])
+
     def test_v35_migration_against_disposable_pg_database(self):
         # Regression check: the connected Neon dev branch was at schema 35.
         # The DELETE is allowed only in the disposable localhost workos_ci DB.
