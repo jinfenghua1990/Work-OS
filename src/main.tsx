@@ -65,12 +65,12 @@ const modules: { id: Module; label: string; icon: React.ElementType }[] = [
   { id: 'finance', label: '财务中心', icon: WalletCards },
 ]
 
-const moduleCopy: Record<Module, { eyebrow: string; title: string; desc: string; tabs: string[] }> = {
-  overview: { eyebrow: 'WORKSPACE / 经营驾驶舱', title: '经营总览', desc: '汇总已录入的业务与财务事实。未接入来源的数据会明确标记，不以演示数代替实际。', tabs: ['经营总览', '业务动态', '待我处理'] },
-  coffee: { eyebrow: 'COFFEE / 咖啡业务', title: '咖啡业务', desc: '采购、生产、库存与渠道销售在这里协同。', tabs: ['采购管理', '库存管理', '经营分析'] },
-  bike: { eyebrow: 'BIKE / 自行车业务', title: '自行车业务', desc: '收口 ALSVID 采购与财务数据，保留外部系统作为产品和库存事实来源。', tabs: ['采购与付款节点', '到岸成本归集', '销售与利润'] },
-  exhibition: { eyebrow: 'EVENTS / 展会项目', title: '展会项目', desc: '把预算执行与真实经营损益放在同一个项目视图中核对。', tabs: ['项目概览', '预算与费用', '样品调度'] },
-  finance: { eyebrow: 'FINANCE / 财务核算中心', title: '财务核算中心', desc: '流水、票据和业务单据各自记录，再通过可追溯认领形成完整账务。', tabs: ['收付认领', '发票管理', '经营报表'] },
+const moduleCopy: Record<Module, { eyebrow: string; title: string; desc: string }> = {
+  overview: { eyebrow: 'WORKSPACE / 经营驾驶舱', title: '经营总览', desc: '汇总已录入的业务与财务事实。未接入来源的数据会明确标记，不以演示数代替实际。' },
+  coffee: { eyebrow: 'COFFEE / 咖啡业务', title: '咖啡业务', desc: '采购、收货、库存、销售及周转在这里协同。' },
+  bike: { eyebrow: 'BIKE / 自行车业务', title: '自行车业务', desc: '收口 ALSVID 采购与财务数据，保留外部系统作为产品和库存事实来源。' },
+  exhibition: { eyebrow: 'EVENTS / 展会项目', title: '展会项目', desc: '把预算执行与真实经营损益放在同一个项目视图中核对。' },
+  finance: { eyebrow: 'FINANCE / 财务核算中心', title: '财务中心', desc: '流水、票据和业务单据各自记录，再通过可追溯认领形成完整账务。' },
 }
 
 type InventoryRow = { sku: string; currency: string; quantity: number; value: string }
@@ -142,7 +142,6 @@ function App() {
   const [drawer, setDrawer] = useState(false)
   const [quickCreate, setQuickCreate] = useState<{kind:'purchase'|'sales';requestId:string}|null>(null)
   const [query, setQuery] = useState('')
-  const [periodOpen, setPeriodOpen] = useState(false)
   const now = new Date()
   const currentPeriod = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`
   const [inventory, setInventory] = useState<InventoryRow[]>([])
