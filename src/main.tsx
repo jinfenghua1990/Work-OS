@@ -873,7 +873,7 @@ function Legend({ color, label, value, percent }: { color: string; label: string
 function CreateOption({ icon: Icon, title, desc, onClick }: { icon: React.ElementType; title: string; desc: string; onClick: () => void }) { return <button className="create-option" onClick={onClick}><span><Icon size={17}/></span><span><strong>{title}</strong><small>{desc}</small></span><ArrowRight size={15}/></button> }
 function PackageIcon({ size = 16 }: { size?: number }) { return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 8 9 5 9-5M3 8v9l9 5 9-5V8M12 13v9"/></svg> }
 
-type LocalAccessStatus={requires_login:boolean;authenticated:boolean;role:string|null;local_only:boolean}
+type LocalAccessStatus={requires_login:boolean;authenticated:boolean;role:string|null;local_only:boolean;named_accounts?:boolean;username?:string|null}
 function AuthGate(){
   const [access,setAccess]=useState<LocalAccessStatus|null>(null)
   const [error,setError]=useState('')
@@ -889,7 +889,7 @@ function AuthGate(){
     try{
       const form=new FormData(event.currentTarget)
       const response=await fetch('/api/auth/login',{method:'POST',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({password:form.get('password')})})
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({username:form.get('username'),password:form.get('password')})})
       const result=await response.json()
       if(!response.ok)throw new Error(result.error||'登录失败')
       await readAccess()
@@ -900,20 +900,21 @@ function AuthGate(){
     try{
       await fetch('/api/auth/logout',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({})})
-      setAccess({requires_login:true,authenticated:false,role:null,local_only:true})
+      setAccess({requires_login:true,authenticated:false,role:null,local_only:true,named_accounts:access?.named_accounts??false})
     }finally{setBusy(false)}
   }
   if(!access)return <main style={{maxWidth:480,margin:'15vh auto',padding:24}}><h1>Work OS</h1><p>{error||'正在检查本地服务…'}</p><button onClick={()=>void readAccess()}>重试连接</button></main>
   if(!access.authenticated)return <main style={{maxWidth:430,margin:'14vh auto',padding:30}}>
-    <h1>Work OS · 登录</h1><p>本地经营财务工作台，请输入管理密码。</p>
+    <h1>Work OS · 登录</h1><p>{access.named_accounts?'具名财务账号登录（仅本机受控访问）':'本地经营财务工作台，请输入管理密码。'}</p>
     <form onSubmit={e=>void login(e)} style={{display:'grid',gap:16}}>
-      <label>管理密码<input type="password" name="password" required autoComplete="current-password" autoFocus/></label>
+      {access.named_accounts&&<label>财务账号<input name="username" required autoComplete="username" autoFocus/></label>}
+      <label>登录密码<input type="password" name="password" required autoComplete="current-password" autoFocus={!access.named_accounts}/></label>
       {error&&<p className="form-error" role="alert">{error}</p>}
       <button className="primary-button" disabled={busy}>{busy?'正在验证…':'登录工作台'}</button>
     </form></main>
   return <><App/>{access.requires_login?
     <button type="button" style={{position:'fixed',bottom:15,right:18,zIndex:999}}
-      className="secondary-button" disabled={busy} onClick={()=>void logout()}>退出登录</button>:
+      className="secondary-button" disabled={busy} onClick={()=>void logout()}>{access.username?`${access.username} · ${access.role} · `:''}退出登录</button>:
     <div style={{position:'fixed',bottom:12,right:12,zIndex:999,fontSize:12,opacity:0.8}}>
       本地未设登录密码，请运行 backend/set_local_password.py
     </div>}</>
