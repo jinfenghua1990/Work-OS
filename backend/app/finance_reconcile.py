@@ -198,7 +198,7 @@ def monthly(conn,period:str)->dict:
             "SELECT linked_amount FROM invoice_links WHERE invoice_id=?",(item["id"],),
         ).fetchall()),ZERO)
         gross=_amount(item["total_amount"])
-        net_info=invoice_red.net_for(conn,item["id"])
+        net_info=invoice_red.net_for(conn,item["id"],as_of=period+"-31")
         net=_amount(net_info["net_amount"])
         if paid>net:
             invoice_result["overlinked"]+=1
@@ -238,7 +238,7 @@ def monthly(conn,period:str)->dict:
         linked=sum((_amount(r[0]) for r in conn.execute(
             "SELECT linked_amount FROM invoice_links WHERE invoice_id=?",(blue_id,)
         ).fetchall()),ZERO)
-        net=_amount(invoice_red.net_for(conn,blue_id)["net_amount"])
+        net=_amount(invoice_red.net_for(conn,blue_id,as_of=period+"-31")["net_amount"])
         if linked>net:
             invoice_result["overlinked"]+=1
             if len(invoice_result["details"])<20:
