@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import io
+import json
+import http.client
+import threading
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"app"))
@@ -132,6 +136,58 @@ class NamedFinanceApprovalTests(unittest.TestCase):
         self.assertTrue(duplicate["duplicate"])
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],2)
+
+    def test_http_named_session_roles_and_browser_gate(self):
+        httpd=ThreadingHTTPServer(("127.0.0.1",0),server.Api)
+        port=httpd.server_address[1]
+        thread=threading.Thread(target=httpd.serve_forever,daemon=True)
+        thread.start()
+        def request(method,path,payload=None,cookie=None,origin=None):
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5)
+            headers={}
+            if payload is not None:
+                headers["Content-Type"]="application/json"
+            if cookie:
+                headers["Cookie"]=cookie
+            if origin:
+                headers["Origin"]=origin
+            connection.request(method,path,json.dumps(payload) if payload is not None else None,headers)
+            response=connection.getresponse()
+            body=response.read()
+            result=(response.status,json.loads(body) if body else {},response.getheader("Set-Cookie"))
+            connection.close()
+            return result
+        try:
+            status,body,_=request("GET","/api/health")
+            self.assertEqual(status,401,body)
+            status,body,cookie=request("POST","/api/auth/login",{
+                "username":"accountant01","password":"a"*18
+            })
+            self.assertEqual(status,200,body)
+            cookie=cookie.split(";",1)[0]
+            status,body,_=request("GET","/api/auth/status",cookie=cookie)
+            self.assertEqual(status,200,body)
+            self.assertEqual(body["username"],"accountant01")
+            status,body,_=request("POST","/api/bank/allocate",{},cookie=cookie)
+            self.assertEqual(status,403,body)
+            status,body,_=request("POST","/api/personal-advances/approve",{},cookie=cookie)
+            self.assertEqual(status,403,body)
+            status,body,_=request("POST","/api/invoices",{},cookie=cookie)
+            self.assertEqual(status,422,body)
+            status,body,_=request("POST","/api/invoices",{},cookie=cookie,
+                                   origin="https://attacker.example")
+            self.assertEqual(status,403,body)
+            viewer=request("POST","/api/auth/login",{
+                "username":"viewer01","password":"d"*18
+            })
+            self.assertEqual(viewer[0],200)
+            read_only_cookie=viewer[2].split(";",1)[0]
+            status,body,_=request("POST","/api/expenses",{},cookie=read_only_cookie)
+            self.assertEqual(status,403,body)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(2)
 
     def test_legacy_unattributed_draft_is_fail_closed(self):
         with server.db() as conn:
