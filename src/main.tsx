@@ -164,6 +164,7 @@ function App() {
   const [operatingReport,setOperatingReport]=useState<OperatingReport|null>(null)
   const [journalEntries,setJournalEntries]=useState<JournalEntry[]>([])
   const [apiOnline, setApiOnline] = useState(false)
+  const [dbBackend,setDbBackend]=useState<'sqlite'|'postgres'|null>(null)
   const [lastRefreshAt,setLastRefreshAt]=useState<Date|null>(null)
   const copy = moduleCopy[active]
   const activePageKey = `${active}|${tab}`
@@ -171,8 +172,8 @@ function App() {
     try {
       const [health, inv, movement, po, op, expenseRows, projectRows, samples, bike, bikeCostRows, bikeSaleRows, bank, invoice, periods, operating, journals, rules,safety] = await Promise.all([fetch('/api/health'),fetch('/api/inventory'),fetch('/api/movements'),fetch('/api/purchases'),fetch('/api/receivables-payables'),fetch('/api/expenses'),fetch('/api/projects'),fetch('/api/projects/samples'),fetch('/api/bike/orders'),fetch('/api/bike/landed-costs'),fetch('/api/bike/sales'),fetch('/api/bank/transactions'),fetch('/api/invoices'),fetch('/api/periods'),fetch(`/api/reports/operating?period=${currentPeriod}`),fetch('/api/journals'),fetch('/api/packaging-rules'),fetch('/api/inventory/safety-stock')])
       if (![health,inv,movement,po,op,expenseRows,projectRows,samples,bike,bikeCostRows,bikeSaleRows,bank,invoice,periods,operating,journals,rules,safety].every(r=>r.ok)) throw new Error('本地 API 暂不可用')
-      setInventory(await inv.json());setSafetyStocks(await safety.json());setInventoryMovements(await movement.json());setPurchases(await po.json());setOpenItems(await op.json());setExpenses(await expenseRows.json());setProjects(await projectRows.json());setSampleDispatches(await samples.json());setBikeOrders(await bike.json());setBikeCosts(await bikeCostRows.json());setBikeSales(await bikeSaleRows.json());setBankRows(await bank.json());setInvoices(await invoice.json());setPeriodLocks(await periods.json());setOperatingReport(await operating.json());setJournalEntries(await journals.json());setPackagingRules(await rules.json());setLastRefreshAt(new Date());setApiOnline(true)
-    } catch { setApiOnline(false) }
+      setInventory(await inv.json());setSafetyStocks(await safety.json());setInventoryMovements(await movement.json());setPurchases(await po.json());setOpenItems(await op.json());setExpenses(await expenseRows.json());setProjects(await projectRows.json());setSampleDispatches(await samples.json());setBikeOrders(await bike.json());setBikeCosts(await bikeCostRows.json());setBikeSales(await bikeSaleRows.json());setBankRows(await bank.json());setInvoices(await invoice.json());setPeriodLocks(await periods.json());setOperatingReport(await operating.json());setJournalEntries(await journals.json());setPackagingRules(await rules.json());const healthInfo=await health.json() as {database_backend:'sqlite'|'postgres'};setDbBackend(healthInfo.database_backend);setLastRefreshAt(new Date());setApiOnline(true)
+    } catch { setApiOnline(false);setDbBackend(null) }
   }
   useEffect(() => { void refreshData() }, [])
   // 任何入口改变了当前模块/子页（含业务代码里的 setTab / navigate），都自动补进标签栏
@@ -213,7 +214,7 @@ function App() {
   return <div className="fx-shell">
     <header className="fx-topbar">
       <button className="fx-brand" onClick={() => openPage('overview','overview')} aria-label="回到经营总览"><span className="fx-logo">🤝</span><span className="fx-brandname">workOS · 经营工作台</span></button>
-      <div className="fx-brandpick" title="当前 Work OS 账套"><span className="fx-bp-logo">🏷</span><span className="fx-bp-name">统一经营账套</span></div>
+      <div className="fx-brandpick" title="当前 Work OS 账套"><span className="fx-bp-logo">🏷</span><span className="fx-bp-name">{dbBackend==='postgres'?'PostgreSQL 共享账套':dbBackend==='sqlite'?'SQLite 离线账套':'账套未连接'}</span></div>
       <nav className="fx-primary" aria-label="一级导航">
         {modules.map(item => <button key={item.id} className={`fx-pitem ${active === item.id ? 'active' : ''}`} onClick={() => navigate(item.id)}><span className="fx-ic">{moduleIconEmoji[item.id]}</span><span>{item.label}</span></button>)}
       </nav>
@@ -254,7 +255,7 @@ function App() {
             const isCurrentPage = page.key === activePageKey
             return <div key={page.key} className={`fx-frame ${isCurrentPage ? 'active' : ''}`} style={{display:isCurrentPage?'block':'none'}} aria-hidden={!isCurrentPage}>
             <div className="main-content">
-      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{modules.find(item => item.id === active)?.label}</span><span className="crumb-slash">/</span><span>{sectionLabel(active,tab)}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> 统一经营账套</span></div>
+      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{modules.find(item => item.id === active)?.label}</span><span className="crumb-slash">/</span><span>{sectionLabel(active,tab)}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> {dbBackend==='postgres'?'PostgreSQL':dbBackend==='sqlite'?'SQLite 离线':'未连接'}</span></div>
       <section className="welcome-row"><div><div className="eyebrow"><span className="eyebrow-line"/>{copy.eyebrow}</div><h1>{sectionLabel(active,tab)}</h1><p className="welcome-desc">{copy.desc}</p></div><button className="primary-button" onClick={() => setDrawer(true)}><Plus size={17}/> 新建业务单据</button></section>
 
 
