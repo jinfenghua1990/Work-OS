@@ -8,10 +8,13 @@ import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("WORKOS_DB_BACKEND","postgres")
-os.environ.setdefault("WORKOS_EVIDENCE_STORAGE","r2")
-os.environ.setdefault("WORKOS_HOST","127.0.0.1")
-os.environ.setdefault("WORKOS_PORT","8106")
+# Only set shared-mode defaults for an actual connected launch. Importing this
+# module in SQLite regression tests must not mutate global process settings.
+if __name__=="__main__":
+    os.environ.setdefault("WORKOS_DB_BACKEND","postgres")
+    os.environ.setdefault("WORKOS_EVIDENCE_STORAGE","r2")
+    os.environ.setdefault("WORKOS_HOST","127.0.0.1")
+    os.environ.setdefault("WORKOS_PORT","8106")
 sys.path.insert(0,str(Path(__file__).resolve().parent/"app"))
 import server
 
