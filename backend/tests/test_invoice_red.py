@@ -98,6 +98,8 @@ class CreditNoteTests(unittest.TestCase):
             )
         self.register()
         with server.db() as conn:
+            self.assertEqual(invoice_red.net_for(conn,self.blue_id,as_of="2026-10-31")["net_amount"],"100.00")
+            self.assertEqual(invoice_red.net_for(conn,self.blue_id,as_of="2026-11-30")["net_amount"],"40.00")
             oct_result=monthly_flow.report(conn,"2026-10")
             nov_result=monthly_flow.report(conn,"2026-11")
         self.assertEqual(oct_result["invoices"]["currencies"][0]["output_total"],"100.00")
@@ -134,6 +136,19 @@ class CreditNoteTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"immutable"):
                 invoice_red.register_rate(conn,{**data,"rate_percent":"9"},
                                           server.ensure_open,server.now)
+
+    def test_tax_rate_open_ended_version_is_superseded_without_overwrite(self):
+        base={"rate_code":"VAT_LOCAL","valid_from":"2026-01-01","valid_to":"",
+              "rate_percent":"9","description":"历史税率测试","source_reference":"test official source",
+              "created_by":"reviewer"}
+        with server.db() as conn:
+            invoice_red.register_rate(conn,base,server.ensure_open,server.now)
+            invoice_red.register_rate(conn,{**base,"valid_from":"2026-11-01",
+                "rate_percent":"13","description":"新版税率测试"},server.ensure_open,server.now)
+            rates=invoice_red.list_rates(conn)
+            self.assertEqual(rates[0]["effective_valid_to"],None)
+            self.assertEqual(rates[1]["effective_valid_to"],"2026-10-31")
+            self.assertEqual(rates[1]["rate_percent"],"9")
 
     def test_red_after_existing_link_flags_reconciliation(self):
         with server.db() as conn:
