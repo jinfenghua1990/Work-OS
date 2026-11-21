@@ -62,7 +62,7 @@ class ImportAndMatchingTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM invoices").fetchone()[0],2)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM archive_links").fetchone()[0],2)
     def test_requires_existing_original_and_foreign_rate(self):
-        with self.assertRaisesRegex(ValueError,"archived original"):
+        with self.assertRaisesRegex(ValueError,"archived invoice source file"):
             self.api.import_invoices({"archive_file_id":"a"*64,"rows":[self.row()]})
         value=self.row();value["currency"]="EUR"
         status,result=self.api.import_invoices({"archive_file_id":self.archive_id,"rows":[value]})
