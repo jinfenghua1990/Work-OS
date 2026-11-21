@@ -131,16 +131,19 @@ export function InvoiceBatchImport({refresh}:{refresh:()=>Promise<void>}){
           'X-Source-System':'finance.invoice.import'},body:file})
       const evidence=await original.json()
       if(!original.ok||!evidence.id)throw new Error(evidence.error||'原始清单归档失败')
-      const items=rows.map(cells=>({
-        invoice_number:get(cells,'invoice_number'),
-        direction:get(cells,'direction')||defaultDirection,
-        counterparty:get(cells,'counterparty'),
-        issued_on:get(cells,'issued_on'),
-        total_amount:get(cells,'total_amount'),tax_amount:get(cells,'tax_amount'),
-        currency:get(cells,'currency')||defaultCurrency,
-        exchange_rate:get(cells,'exchange_rate')||'1',
-        rate_date:get(cells,'rate_date')||get(cells,'issued_on'),
-      }))
+      const items=rows.map(cells=>{
+        const currency=(get(cells,'currency')||defaultCurrency).toUpperCase()
+        return {
+          invoice_number:get(cells,'invoice_number'),
+          direction:get(cells,'direction')||defaultDirection,
+          counterparty:get(cells,'counterparty'),
+          issued_on:get(cells,'issued_on'),
+          total_amount:get(cells,'total_amount'),tax_amount:get(cells,'tax_amount'),
+          currency,
+          exchange_rate:get(cells,'exchange_rate')||(currency==='CNY'?'1':''),
+          rate_date:get(cells,'rate_date')||(currency==='CNY'?get(cells,'issued_on'):''),
+        }
+      })
       const total:{created:number;duplicates:number;rejected:{row:number;error:string}[]}={
         created:0,duplicates:0,rejected:[],
       }
