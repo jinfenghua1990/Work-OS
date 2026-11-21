@@ -74,7 +74,7 @@ const modules: { id: Module; label: string; icon: React.ElementType }[] = [
 const moduleCopy: Record<Module, { eyebrow: string; title: string; desc: string }> = {
   overview: { eyebrow: 'WORKSPACE / 经营驾驶舱', title: '经营总览', desc: '汇总已录入的业务与财务事实。未接入来源的数据会明确标记，不以演示数代替实际。' },
   coffee: { eyebrow: 'COFFEE / 咖啡业务', title: '咖啡业务', desc: '采购、收货、库存、销售及周转在这里协同。' },
-  bike: { eyebrow: 'AL SVID / 统一财务视图', title: 'ALSVID 财务汇总', desc: '仅查看财务汇总、核销与异常；采购、生产、入库和销售业务在 ALSVID Admin 操作。' },
+  bike: { eyebrow: 'ALSVID / 统一财务视图', title: 'ALSVID 财务汇总', desc: '仅查看财务汇总、核销与异常；采购、生产、入库和销售业务在 ALSVID Admin 操作。' },
   exhibition: { eyebrow: 'EVENTS / 展会项目', title: '展会项目', desc: '把预算执行与真实经营损益放在同一个项目视图中核对。' },
   finance: { eyebrow: 'FINANCE / 财务核算中心', title: '财务中心', desc: '流水、票据和业务单据各自记录，再通过可追溯认领形成完整账务。' },
 }
