@@ -3,6 +3,10 @@
 -- Run on an isolated Neon branch and reconcile before changing production.
 -- Does not alter invoices, close history, existing journal entries or tax statuses.
 BEGIN;
+DO $workos$ BEGIN
+    IF COALESCE((SELECT MAX(version) FROM public.schema_migrations),0) <> 43
+    THEN RAISE EXCEPTION 'schema 43 required before upgrading to 44'; END IF;
+END $workos$;
 
 CREATE TABLE IF NOT EXISTS invoice_credit_notes (
     id TEXT PRIMARY KEY,
