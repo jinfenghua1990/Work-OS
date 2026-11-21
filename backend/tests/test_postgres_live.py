@@ -144,6 +144,42 @@ class PostgresLiveTests(unittest.TestCase):
             ).fetchone()
             self.assertIsNone(present)
 
+    def test_invoice_batch_import_works_in_disposable_postgres(self):
+        """Only the disposable localhost CI database; metadata stub is not a real archive."""
+        marker=uuid4().hex
+        raw=("synthetic archived listing "+marker).encode("utf-8")
+        sha=hashlib.sha256(raw).hexdigest()
+        with server.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO archive_files(id,sha256,size_bytes,storage_key,created_at) "
+                "VALUES(?,?,?,?,?)",
+                (sha,sha,len(raw),sha[:2]+"/"+sha[2:4]+"/"+sha,server.now()),
+            )
+        api=server.Api.__new__(server.Api)
+        api.reply=lambda status,payload:(status,payload)
+        payload={"archive_file_id":sha,"rows":[
+            {"invoice_number":"CI-PG-"+marker,"direction":"purchase",
+             "counterparty":"Test Vendor Inc","issued_on":"2026-11-20",
+             "total_amount":"110.00","tax_amount":"10.00",
+             "currency":"CNY"},
+        ]}
+        status,result=api.import_invoices(payload)
+        self.assertEqual(status,200,result)
+        self.assertEqual(len(result["created"]),1,result)
+        self.assertFalse(result["tax_credit_recognized"])
+        status,again=api.import_invoices(payload)
+        self.assertEqual(status,200,again)
+        self.assertEqual(len(again["duplicates"]),1,again)
+        with server.db() as conn:
+            source_id=result["created"][0]["id"]
+            invoice=conn.execute("SELECT tax_status FROM invoices WHERE id=?",(source_id,)).fetchone()
+            self.assertEqual(invoice["tax_status"],"pending")
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM archive_links WHERE file_id=? AND source_system='finance.invoice'",
+                (sha,),
+            ).fetchone()[0],1)
+
     def test_v35_migration_against_disposable_pg_database(self):
         # Regression check: the connected Neon dev branch was at schema 35.
         # The DELETE is allowed only in the disposable localhost workos_ci DB.
