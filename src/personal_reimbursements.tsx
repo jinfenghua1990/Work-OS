@@ -1,4 +1,5 @@
 import {useEffect,useState} from 'react'
+import {PersonalBulkImport} from './personal_bulk'
 
 type Payable={
   id:string;direction:string;source_type:string;counterparty:string;
@@ -121,6 +122,7 @@ export function PersonalReimbursementsPanel({
     </div><button className="secondary-button" type="button"
       onClick={()=>setRefreshTick(t=>t+1)}>刷新台账</button></div>
     <p className="personal-important">个人银行卡交易不导入公司银行流水池。已存在采购应付的款项请选“代付已有应付”，避免重复计成本。</p>
+    <PersonalBulkImport reload={()=>setRefreshTick(t=>t+1)}/>
     <form className="personal-form" onSubmit={e=>void create(e)}>
       <div className="form-split"><label>支付类型
         <select value={mode} onChange={e=>{setMode(e.target.value as typeof mode);setChosenPayable('')}}>
