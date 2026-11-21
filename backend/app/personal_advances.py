@@ -297,6 +297,52 @@ def approve(conn,raw,now,ensure_open,journal):
             "approved_on":accounting_on,"duplicate":False}
 
 
+
+def import_drafts(conn,data,now):
+    """Stage filtered personal BUSINESS payments from an archived CSV/XLSX.
+
+    Import does not create a journal, bank transaction or company expense.
+    Every row is explicitly reviewed before it can become reimbursable.
+    """
+    import hashlib
+    if not isinstance(data,dict):
+        raise ValueError("personal payment batch must be an object")
+    file_id=str(data.get("archive_file_id") or "").strip().lower()
+    if not re.fullmatch("[0-9a-f]{64}",file_id):
+        raise ValueError("archived original file ID is required")
+    if conn.execute("SELECT 1 FROM archive_files WHERE id=?",(file_id,)).fetchone() is None:
+        raise ValueError("source payment listing is not archived")
+    rows=data.get("rows")
+    if not isinstance(rows,list) or not 1<=len(rows)<=100:
+        raise ValueError("personal payment batch must contain 1 to 100 rows")
+    created=[];duplicates=[];rejected=[]
+    for i,item in enumerate(rows,1):
+        savepoint=f"personal_batch_{i}"
+        conn.execute(f"SAVEPOINT {savepoint}")
+        try:
+            if not isinstance(item,dict):
+                raise ValueError("row must be an object")
+            record=dict(item)
+            record["archive_file_id"]=file_id
+            record.setdefault("mode","expense")
+            if not record.get("source_key"):
+                natural="|".join(str(record.get(field) or "").strip() for field in
+                    ("claimant","merchant","paid_on","payment_reference","amount","mode"))
+                record["source_key"]="personal:source:"+hashlib.sha256(
+                    natural.encode("utf-8")).hexdigest()
+            out=draft(conn,record,now)
+            result={"row":i,"id":out["id"]}
+            (duplicates if out["duplicate"] else created).append(result)
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except (ValueError,TypeError,KeyError) as exc:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            conn.execute(f"RELEASE SAVEPOINT {savepoint}")
+            rejected.append({"row":i,"error":str(exc)})
+    return {"created":created,"duplicates":duplicates,"rejected":rejected,
+            "pending_review":True,"posted_to_ledger":False,
+            "company_bank_transactions_created":0,"archive_file_id":file_id}
+
+
 def list_claims(conn):
     rows=conn.execute(
         "SELECT p.*,r.original_amount AS employee_payable_amount,"
