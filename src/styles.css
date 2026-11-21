@@ -301,3 +301,19 @@ body{overflow:hidden}
 .reconcile-notice{padding:10px 12px;border-radius:7px;border:1px solid #e5e7eb;margin:0;font-size:11px;color:#475569}
 .reconcile-footnote{color:#64748b;font-size:11px}
 @media(max-width:850px){.reconcile-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.reconcile-status{align-items:flex-start;flex-direction:column}}
+
+/* 个人垫付与报销：财务中心 → 经营费用 */
+.personal-advances{display:flex;flex-direction:column;gap:14px}
+.personal-form{display:flex;flex-direction:column;gap:12px}
+.personal-form .form-split{gap:12px}
+.personal-important{border:1px solid #e1e8ef;border-radius:8px;background:#f7f9fc;color:#506276;font-size:12px;line-height:1.6;padding:10px 12px}
+.personal-summary{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid #e6ebf1;padding:6px 0 12px;font-size:12px}
+.personal-summary span{color:#66758a}
+.personal-ledger{display:flex;flex-direction:column;gap:0}
+.personal-ledger-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-bottom:1px solid #e5eaf0}
+.personal-ledger-row>div{display:flex;flex-direction:column;gap:5px;min-width:0}
+.personal-ledger-row strong{font-size:12px;font-variant-numeric:tabular-nums}
+.personal-ledger-row small{font-size:11px;color:#708095;overflow-wrap:anywhere}
+.personal-ledger-row button{flex-shrink:0}
+.personal-status{white-space:nowrap;font-size:12px;color:#536276}
+@media(max-width:650px){.personal-ledger-row{align-items:flex-start;flex-direction:column}}
