@@ -10,13 +10,14 @@ import {BankMatchSuggestions,InvoiceBatchImport} from './finance_import'
 import {MonthlyFlowPanel} from './monthly_flow_panel'
 import {FinanceReconciliationPanel} from './finance_reconcile_panel'
 import {PersonalReimbursementsPanel} from './personal_reimbursements'
+import {AlsvidFinanceWorkspace} from './alsvid_finance_workspace'
 import './styles.css'
 
 type Module = 'overview' | 'coffee' | 'bike' | 'exhibition' | 'finance'
 type BaseTab = 'overview' | 'activity' | 'actions'
 type CoffeePage = 'purchases' | 'stock' | 'sales' | 'rules' | 'sales-returns' | 'analysis'
 type FinancePage = 'bank' | 'items' | 'invoices' | 'archive' | 'expenses' | 'journals' | 'reports' | 'platform'
-type Tab = BaseTab | CoffeePage | FinancePage
+type Tab = BaseTab | CoffeePage | FinancePage | 'sync'
 type OpenTab = { key: string; module: Module; tab: Tab; label: string }
 type MenuItem = { id: Tab; label: string; icon: string }
 const moduleIconEmoji: Record<Module, string> = { overview: '📊', coffee: '☕', bike: '🚲', exhibition: '🎪', finance: '💳' }
@@ -35,9 +36,10 @@ const moduleSections: Record<Module, MenuItem[]> = {
     {id:'analysis',label:'经营分析',icon:'📈'},
   ],
   bike: [
-    {id:'overview',label:'采购与付款',icon:'🧾'},
-    {id:'activity',label:'到岸成本',icon:'🚢'},
-    {id:'actions',label:'销售与利润',icon:'📊'},
+    {id:'overview',label:'经营总览',icon:'📊'},
+    {id:'activity',label:'财务对账',icon:'💳'},
+    {id:'actions',label:'异常中心',icon:'⚠'},
+    {id:'sync',label:'同步记录',icon:'🔄'},
   ],
   exhibition: [
     {id:'overview',label:'项目概览',icon:'📋'},
@@ -72,7 +74,7 @@ const modules: { id: Module; label: string; icon: React.ElementType }[] = [
 const moduleCopy: Record<Module, { eyebrow: string; title: string; desc: string }> = {
   overview: { eyebrow: 'WORKSPACE / 经营驾驶舱', title: '经营总览', desc: '汇总已录入的业务与财务事实。未接入来源的数据会明确标记，不以演示数代替实际。' },
   coffee: { eyebrow: 'COFFEE / 咖啡业务', title: '咖啡业务', desc: '采购、收货、库存、销售及周转在这里协同。' },
-  bike: { eyebrow: 'BIKE / 自行车业务', title: '自行车业务', desc: '收口 ALSVID 采购与财务数据，保留外部系统作为产品和库存事实来源。' },
+  bike: { eyebrow: 'ALSVID / 统一财务视图', title: 'ALSVID 财务汇总', desc: '仅查看财务汇总、核销与异常；采购、生产、入库和销售业务在 ALSVID Admin 操作。' },
   exhibition: { eyebrow: 'EVENTS / 展会项目', title: '展会项目', desc: '把预算执行与真实经营损益放在同一个项目视图中核对。' },
   finance: { eyebrow: 'FINANCE / 财务核算中心', title: '财务中心', desc: '流水、票据和业务单据各自记录，再通过可追溯认领形成完整账务。' },
 }
@@ -263,7 +265,7 @@ function App() {
 
 
 
-      {active === 'coffee' ? <CoffeeWorkspace inventory={inventory} safetyStocks={safetyStocks} movements={inventoryMovements} purchases={purchases} packagingRules={packagingRules} apiOnline={apiOnline} refresh={refreshData} quickCreate={isCurrentPage?quickCreate:null} onQuickCreateHandled={()=>setQuickCreate(null)} subtab={tab as CoffeePage} onSubtabChange={next=>openPage('coffee',next)}/> : active === 'bike' ? <BikeWorkspace orders={bikeOrders} costs={bikeCosts} sales={bikeSales} tab={tab} refresh={refreshData}/> : active === 'finance' ? <FinanceWorkspace projects={projects} openItems={openItems} expenses={expenses} bankRows={bankRows} invoices={invoices} journalEntries={journalEntries} operatingReport={operatingReport} currentPeriod={currentPeriod} refresh={refreshData} section={tab as FinancePage} /> : active==='exhibition'?<ExhibitionWorkspace projects={projects} expenses={expenses} inventory={inventory} packagingRules={packagingRules} sampleDispatches={sampleDispatches} tab={tab} refresh={refreshData}/>: active === 'overview' && tab === 'overview' ? <>
+      {active === 'coffee' ? <CoffeeWorkspace inventory={inventory} safetyStocks={safetyStocks} movements={inventoryMovements} purchases={purchases} packagingRules={packagingRules} apiOnline={apiOnline} refresh={refreshData} quickCreate={isCurrentPage?quickCreate:null} onQuickCreateHandled={()=>setQuickCreate(null)} subtab={tab as CoffeePage} onSubtabChange={next=>openPage('coffee',next)}/> : active === 'bike' ? <AlsvidFinanceWorkspace tab={tab} period={currentPeriod} onOpenFinance={section=>openPage('finance',section)}/> : active === 'finance' ? <FinanceWorkspace projects={projects} openItems={openItems} expenses={expenses} bankRows={bankRows} invoices={invoices} journalEntries={journalEntries} operatingReport={operatingReport} currentPeriod={currentPeriod} refresh={refreshData} section={tab as FinancePage} /> : active==='exhibition'?<ExhibitionWorkspace projects={projects} expenses={expenses} inventory={inventory} packagingRules={packagingRules} sampleDispatches={sampleDispatches} tab={tab} refresh={refreshData}/>: active === 'overview' && tab === 'overview' ? <>
         <section className="metric-grid" aria-label="经营关键指标">
           <Metric title="本月销售收入" value={apiOnline&&operatingReport?`${operatingReport.currency} ${Number(operatingReport.sales_revenue).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`:'—'} change={operatingReport?.period===currentPeriod?'按本期已过账分录':'等待本地 API 连接'} trend={apiOnline?'neutral':'warning'} icon={ArrowUpRight} caption="权责发生制确认的销售收入" chart={[]} />
           <Metric title="本月销售毛利" value={apiOnline&&operatingReport?`${operatingReport.currency} ${Number(operatingReport.gross_profit).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`:'—'} change={operatingReport?.period===currentPeriod?'收入减 FIFO 销售成本':'等待本地 API 连接'} trend={apiOnline?'neutral':'warning'} icon={Activity} caption="费用按已登记事实计算；完整性需在财务中心核对" chart={[]} tone="green" />
