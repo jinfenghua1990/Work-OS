@@ -97,7 +97,10 @@ def source_inventory(url:str)->dict:
         from psycopg.rows import dict_row
     except ImportError as exc:
         raise ValueError("psycopg is required for connected backup") from exc
-    with psycopg.connect(url,row_factory=dict_row) as conn:
+    tls_mode=parse_qs(urlsplit(url).query).get("sslmode",["require"])[0]
+    if tls_mode not in ("require","verify-ca","verify-full"):
+        raise ValueError("source inventory requires TLS")
+    with psycopg.connect(url,sslmode=tls_mode,row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute("SET TRANSACTION READ ONLY")
             cur.execute(
