@@ -61,3 +61,30 @@
 ## 6. 仍未完成
 
 正式双向服务端接口、ALSVID 业务主键映射、历史财务去重迁移、ALSVID 真实订单与库存实时同步、EUR 完整实际损益、R2 远端验证、NAS 真正恢复、全量角色权限、月结真实业务验收。以上不得以 UI 预留或测试通过代替上线完成。
+
+## 7. 本机双数据库差异预检查（**只读，不迁移**）
+
+为避免把 ALSVID 已存在的人工付款当成真实银行流水，先从本地 Mac/NAS 读取两套 Neon 数据库进行差异检查。该命令对两个数据库都使用 PostgreSQL 的 **REPEATABLE READ + READ ONLY** 事务，不建立表、不写财务凭证、不确认收付款，也不把来源原件换成处理后记录。
+
+在本地私有且不提交的 `.env` 中配置：
+
+```env
+WORKOS_DATABASE_URL=postgresql://WorkOS连接地址
+ALSVID_DATABASE_URL=postgresql://ALSVID连接地址
+```
+
+需在本机安装 `backend/requirements.txt` 的 psycopg 驱动。运行：
+
+```bash
+python backend/audit_alsvid_finance.py > alsvid-finance-audit.json
+```
+
+检查项目：
+
+- ALSVID 财务义务按 **唯一 ID + 方向 + 原币金额 + 币种** 与 Work OS 显式引用进行对照；无映射、金额冲突、重复关联分别标记，不能仅凭金额猜。
+- ALSVID `finance_payments` 只能作为**待核对付款登记**，不是已证明的银行流水：未来日期直接拦截、无原始银行唯一流水号或账户证明的保持待人工复核。匹配要求银行流水号、方向、原币金额、币种和实际日期全部相同且唯一，同一银行流水不可对应两条独立付款证据。
+- ALSVID 财务单据不可自动识别为进项或销项税务发票。Work OS 中的 `source_system + source_document_id` 作为票据唯一来源引用，重复 ID 会报警。
+- 对两个数据库只查询、输出差异 JSON（最多展示前 100 个异常），不会将 ALSVID 已存在的付款、采购或销售写入 Work OS，也不会改变 ALSVID 的应付状态。
+- 数据量超出单表 5,000 行时停止并要求有审核依据的分批范围，不把不完整采样伪装成全量核对。
+
+**预检查结果不是两库已同步的证明。** 真实原件与业务凭据、应收应付确认、正式双向 API、账务切换均未验收前，不进行正式数据迁移或自动过账。
