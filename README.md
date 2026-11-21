@@ -40,3 +40,28 @@ npm run dev:connected
 **不要在本机离线账套和共享账套分别记录同一笔正式业务。** `npm run dev:full` 始终是独立的离线 SQLite 体验，数据不会自动同步；正式业务应使用 `dev:connected` 且运行前确认连接的是预期 Neon 分支。
 
 当前财务中心支持银行流水精确匹配建议（人工确认后才核销）、发票批量导入（源文件先归档、冲突行拒绝、税务状态仍为待核实）。这不等同于真实银行/税务平台自动同步。
+
+## Neon + NAS 原件备份与核验
+
+共享账套的原件保存在 Cloudflare R2，本地/NAS 保存独立镜像。备份工具只读导出 Neon PostgreSQL 数据，不创建或修改财务单据，不删除旧备份。
+
+在本地私有 `.env` 中，除了原有 `WORKOS_DATABASE_URL`、`WORKOS_ARCHIVE_ROOT`，增加：
+
+```env
+WORKOS_DB_BACKEND=postgres
+WORKOS_BACKUP_ROOT=/Volumes/NAS/WorkOS/Backups
+```
+
+本机需安装与 PostgreSQL 服务器兼容的 `pg_dump` 和 `pg_restore` 命令。执行：
+
+```bash
+python backend/backup_connected.py
+```
+
+系统逐个比对 NAS 原件 SHA-256 和 Neon 归档索引，生成自定义 PostgreSQL dump，并通过 `pg_restore --list` 验证其结构；最终保存 `database.dump` 和 `manifest.json`，不覆盖旧文件。复核某次备份：
+
+```bash
+python backend/backup_connected.py --verify /Volumes/NAS/WorkOS/Backups/workos-实际备份目录
+```
+
+此校验**不等于实际恢复到空库的演练**；真实备份尚需在拥有 NAS 路径及 Neon 连接配置的本机运行，并且 R2 远端完整性仍需单独验收。
