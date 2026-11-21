@@ -18,6 +18,8 @@ import original_archive
 import evidence_db
 import r2_evidence
 import evidence_audit
+import bank_matching
+import invoice_bulk
 import local_auth
 import xlsx_reader
 import exhibition_assets
@@ -1186,6 +1188,8 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(200,stock_cover(conn))
             if path == "/api/archive/audit":
                 return self.reply(200,evidence_audit.audit_evidence(conn))
+            if path == "/api/bank/match-suggestions":
+                return self.reply(200,bank_matching.from_database(conn))
             if path == "/api/archive/files":
                 rows=conn.execute(
                     "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
@@ -1738,6 +1742,8 @@ class Api(BaseHTTPRequestHandler):
                 return self.classify_cash_flow(data)
             if path == "/api/invoices":
                 return self.create_invoice(data)
+            if path == "/api/invoices/import":
+                return self.import_invoices(data)
             if path == "/api/expenses":
                 return self.create_expense(data)
             if path == "/api/expenses/reconciliation/source":
@@ -3491,6 +3497,12 @@ class Api(BaseHTTPRequestHandler):
             response={"bank_transaction_id": bank_id, "allocated": str(sum((Decimal(x["amount"]) for x in applied),Decimal(0)).quantize(CENT)), "allocated_cny":str(total_cny),"unallocated": str(available), "unallocated_cny":str(available_base.quantize(CENT)), "allocations": applied, "realized_fx_gain_cny":str(fx_gains.quantize(CENT)),"realized_fx_loss_cny":str(fx_losses.quantize(CENT))}
             conn.execute("INSERT INTO financial_action_requests VALUES(?,?,?,?,?)",(action_key,"bank_allocate",serialized,json.dumps(response,ensure_ascii=False,sort_keys=True),now()))
             return self.reply(201,response)
+
+    def import_invoices(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=invoice_bulk.import_batch(conn,data,ensure_open,now)
+        return self.reply(200,result)
 
     def create_invoice(self, data: dict) -> None:
         archive_id=str(data.get("archive_file_id") or "").strip()
