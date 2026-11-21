@@ -3911,7 +3911,7 @@ def main() -> None:
     local_auth.require_loopback_host(host)
     if not local_auth.configured_hash_valid():
         raise RuntimeError("invalid WORKOS_AUTH_PASSWORD_HASH")
-    if not local_auth.enabled():
+    if not finance_identity.enabled() and not local_auth.enabled():
         print("WARNING: local password not configured; this API must remain on loopback.")
     require_database_ready()
     port = int(os.environ.get("WORKOS_PORT", "8103"))
