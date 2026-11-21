@@ -152,10 +152,17 @@ class CreditNoteTests(unittest.TestCase):
         self.assertTrue(result["link_review_required"])
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT linked_amount FROM invoice_links").fetchone()[0],"100.00")
+        with server.db() as conn:
+            conn.execute(
+                "INSERT INTO receivables_payables "
+                "(id,direction,source_type,source_id,counterparty,original_amount,"
+                "settled_amount,currency,due_on,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                ("ar2","receivable","sale","test2","Sample Ltd","100.00","0.00","CNY",None,server.now())
+            )
         with self.assertRaisesRegex(ValueError,"links exceed"):
             self.api.link_invoice({
                 "invoice_id":self.blue_id,"target_type":"receivable",
-                "target_id":"ar1","amount":"10.00","action_key":"extra-link"
+                "target_id":"ar2","amount":"10.00","action_key":"extra-link"
             })
 
 
