@@ -6,7 +6,7 @@ separate reviewed business event, never inferred from the invoice alone.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
@@ -22,11 +22,11 @@ def _money(value, label):
         raise ValueError(f"{label} must be a valid decimal") from exc
     if not n.is_finite() or n < 0 or n != n.quantize(CENT):
         raise ValueError(f"{label} must be non-negative with at most two decimal places")
-    return n
+    return n.quantize(CENT)
 
 
 def _day(value, label):
-    if not isinstance(value, str):
+    if not isinstance(value, str) or len(value)!=10 or value[4]!='-' or value[7]!='-':
         raise ValueError(f"{label} must use YYYY-MM-DD")
     try:
         value = date.fromisoformat(value).isoformat()
@@ -68,11 +68,13 @@ def ensure_tables(conn):
     )""")
 
 
-def credit_totals(conn, blue_invoice_id):
-    rows = conn.execute(
-        "SELECT total_amount,tax_amount FROM invoice_credit_notes WHERE blue_invoice_id=?",
-        (blue_invoice_id,)
-    ).fetchall()
+def credit_totals(conn, blue_invoice_id, as_of=None):
+    query="SELECT total_amount,tax_amount FROM invoice_credit_notes WHERE blue_invoice_id=?"
+    args=(blue_invoice_id,)
+    if as_of:
+        query+=" AND issued_on<=?"
+        args=(blue_invoice_id,as_of)
+    rows=conn.execute(query,args).fetchall()
     return (
         sum((Decimal(row["total_amount"]) for row in rows), Decimal(0)),
         sum((Decimal(row["tax_amount"]) for row in rows), Decimal(0)),
@@ -80,14 +82,14 @@ def credit_totals(conn, blue_invoice_id):
     )
 
 
-def net_for(conn, blue_invoice_id):
+def net_for(conn, blue_invoice_id, as_of=None):
     row = conn.execute(
         "SELECT total_amount,tax_amount FROM invoices WHERE id=?",
         (blue_invoice_id,)
     ).fetchone()
     if not row:
         raise ValueError("blue invoice does not exist")
-    credited, credited_tax, count = credit_totals(conn, blue_invoice_id)
+    credited, credited_tax, count = credit_totals(conn, blue_invoice_id, as_of)
     net = Decimal(row["total_amount"]) - credited
     net_tax = Decimal(row["tax_amount"]) - credited_tax
     if net < 0 or net_tax < 0:
@@ -182,9 +184,20 @@ def register_credit(conn, payload, ensure_open, now, link_document):
 
 
 def list_rates(conn):
-    return [dict(row) for row in conn.execute(
+    rows=[dict(row) for row in conn.execute(
         "SELECT * FROM tax_rate_rules ORDER BY rate_code,valid_from DESC"
     ).fetchall()]
+    next_start={}
+    for row in rows:
+        code=row["rate_code"]
+        end=row["valid_to"]
+        if code in next_start:
+            superseded=(date.fromisoformat(next_start[code])-timedelta(days=1)).isoformat()
+            if end is None or end>superseded:
+                end=superseded
+        row["effective_valid_to"]=end
+        next_start[code]=row["valid_from"]
+    return rows
 
 
 def register_rate(conn,payload,ensure_open,now):
@@ -210,11 +223,6 @@ def register_rate(conn,payload,ensure_open,now):
         raise ValueError("description, authoritative source reference and operator are required")
     if max(len(description),len(source),len(actor))>300:
         raise ValueError("rate metadata too long")
-    overlapping=conn.execute(
-        "SELECT valid_from,valid_to FROM tax_rate_rules WHERE rate_code=? "
-        "AND (valid_to IS NULL OR valid_to>=?) AND (? IS NULL OR valid_from<=?)",
-        (code,start,end,end)
-    ).fetchone()
     prior=conn.execute(
         "SELECT * FROM tax_rate_rules WHERE rate_code=? AND valid_from=?",
         (code,start)
@@ -226,9 +234,20 @@ def register_rate(conn,payload,ensure_open,now):
         if any(str(prior[k] or "") != str(v or "") for k,v in fields.items()):
             raise ValueError("existing tax-rate version is immutable; use a later effective date")
         return {"rate_code":code,"valid_from":start,"duplicate":True}
-    if overlapping:
-        raise ValueError("tax-rate validity periods may not overlap for one code")
-    ensure_open(conn,start)
+    existing=conn.execute(
+        "SELECT valid_from,valid_to FROM tax_rate_rules WHERE rate_code=?",
+        (code,)
+    ).fetchall()
+    for item in existing:
+        prev_start=item["valid_from"]
+        prev_end=item["valid_to"]
+        if prev_start < start:
+            if prev_end is not None and prev_end >= start:
+                raise ValueError("tax-rate validity periods may not overlap for one code")
+        elif end is not None and end >= prev_start:
+            raise ValueError("tax-rate validity periods may not overlap for one code")
+    # Versioned reference metadata does not edit or reopen any historical journal.
+    # The authoritative source and the named operator remain in the immutable row.
     conn.execute("INSERT INTO tax_rate_rules "
                  "(rate_code,valid_from,valid_to,rate_percent,description,source_reference,created_by,created_at) "
                  "VALUES(?,?,?,?,?,?,?,?)",
