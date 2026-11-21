@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS personal_advances (
     paid_on TEXT NOT NULL,
     category TEXT,
     existing_payable_id TEXT REFERENCES receivables_payables(id),
+    vendor_payable_id TEXT REFERENCES receivables_payables(id),
     expense_id TEXT UNIQUE REFERENCES expenses(id),
     employee_payable_id TEXT UNIQUE REFERENCES receivables_payables(id),
     amount TEXT NOT NULL,
@@ -183,6 +184,7 @@ def approve(conn,raw,now,ensure_open,journal):
     amount=Decimal(record["amount"])
     mode=record["mode"]
     expense_id=None
+    vendor_payable_id=None
     if mode=="expense":
         expense_id=str(uuid4())
         conn.execute(
@@ -198,6 +200,22 @@ def approve(conn,raw,now,ensure_open,journal):
             ("operating_expense:"+record["category"],amount,Decimal(0)),
             ("accounts_payable",Decimal(0),amount),
         ],record["business_line"],record["entity_code"],record["project_code"])
+        # The supplier invoice belongs to the merchant, not the card holder.
+        # Record a supplier payable fully settled by the individual's payment
+        # so the incoming invoice can still link to its proper counterparty.
+        vendor_payable_id=str(uuid4())
+        conn.execute(
+            "INSERT INTO receivables_payables "
+            "(id,direction,source_type,source_id,counterparty,original_amount,"
+            "settled_amount,currency,due_on,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (vendor_payable_id,"payable","operating_expense",expense_id,
+             record["merchant"],record["amount"],record["amount"],
+             "CNY",None,now()),
+        )
+        journal(conn,"personal_advance_vendor_transfer",claim_id,accounting_on,[
+            ("accounts_payable",amount,Decimal(0)),
+            ("accounts_payable",Decimal(0),amount),
+        ],record["business_line"],record["entity_code"],record["project_code"])
     elif mode=="existing_payable":
         vendor=conn.execute(
             "SELECT * FROM receivables_payables WHERE id=?",
@@ -208,6 +226,7 @@ def approve(conn,raw,now,ensure_open,journal):
         remaining=Decimal(str(vendor["original_amount"]))-Decimal(str(vendor["settled_amount"]))
         if remaining<amount:
             raise ValueError("supplier payable no longer has sufficient unallocated amount")
+        vendor_payable_id=vendor["id"]
         fx=conn.execute("SELECT * FROM open_item_fx WHERE item_id=?",(vendor["id"],)).fetchone()
         if fx is None:
             raise ValueError("supplier payable lacks verified CNY carrying balance")
@@ -248,12 +267,13 @@ def approve(conn,raw,now,ensure_open,journal):
     )
     conn.execute(
         "UPDATE personal_advances SET status='approved',accounting_on=?,"
-        "approved_by=?,approved_at=?,expense_id=?,employee_payable_id=? WHERE id=?",
-        (accounting_on,actor,now(),expense_id,employee_payable_id,claim_id),
+        "approved_by=?,approved_at=?,expense_id=?,vendor_payable_id=?,employee_payable_id=? WHERE id=?",
+        (accounting_on,actor,now(),expense_id,vendor_payable_id,employee_payable_id,claim_id),
     )
     return {"id":claim_id,"status":"pending_reimbursement",
             "employee_payable_id":employee_payable_id,
-            "expense_id":expense_id,"amount":record["amount"],"currency":"CNY",
+            "expense_id":expense_id,"vendor_payable_id":vendor_payable_id,
+            "amount":record["amount"],"currency":"CNY",
             "approved_on":accounting_on,"duplicate":False}
 
 
