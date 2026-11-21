@@ -68,21 +68,24 @@ export function PersonalBulkImport({reload}:{reload:()=>void}){
     if(!file||!ready){setError('请映射日期、商家、金额、交易号，并填写垫付人');return}
     setBusy(true);setError('');setSummary(null)
     try{
-      const prepared=rows.map(row=>({
-        claimant:cell(row,'claimant')||claimant.trim(),
-        merchant:cell(row,'merchant'),
-        paid_on:cell(row,'paid_on'),
-        amount:cell(row,'amount').replace(/,/g,''),
-        payment_reference:cell(row,'payment_reference'),
-        mode:cell(row,'mode')||'expense',
-        existing_payable_id:cell(row,'existing_payable_id')||null,
-        category:cell(row,'category')||defaultCategory,
-        business_line:cell(row,'business_line')||defaultBusiness,
-        entity_code:'main',
-        project_code:cell(row,'project_code')||null,
-        memo:cell(row,'memo'),
-        currency:'CNY',
-      }))
+      const prepared=rows.map(row=>{
+        const mode=cell(row,'mode')||'expense'
+        return {
+          claimant:cell(row,'claimant')||claimant.trim(),
+          merchant:cell(row,'merchant'),
+          paid_on:cell(row,'paid_on'),
+          amount:cell(row,'amount').replace(/,/g,''),
+          payment_reference:cell(row,'payment_reference'),
+          mode,
+          existing_payable_id:mode==='existing_payable'?(cell(row,'existing_payable_id')||null):null,
+          category:mode==='existing_payable'?null:(cell(row,'category')||defaultCategory),
+          business_line:cell(row,'business_line')||defaultBusiness,
+          entity_code:'main',
+          project_code:cell(row,'project_code')||null,
+          memo:cell(row,'memo'),
+          currency:'CNY',
+        }
+      })
       const period=prepared[0].paid_on.slice(0,7)
       if(!/^\d{4}-\d{2}$/.test(period)||
          prepared.some(row=>row.paid_on.slice(0,7)!==period)){
