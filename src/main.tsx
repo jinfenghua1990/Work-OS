@@ -113,7 +113,7 @@ type ActivityItem={id:string;icon:React.ElementType;tint:string;title:string;det
 function App() {
   const [active, setActive] = useState<Module>('overview')
   const [tab, setTab] = useState<Tab>('overview')
-  const [sideOpen, setSideOpen] = useState(true)
+  const [sideOpen, setSideOpen] = useState(() => window.innerWidth > 900)
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([{ key: 'overview|overview', module: 'overview', tab: 'overview', label: sectionLabel('overview','overview') }])
   // 打开/激活一个二级页面为标签（同一页面不重复开）
   function openPage(module: Module, t: Tab) {
@@ -227,16 +227,16 @@ function App() {
     <div className="fx-body">
       <aside className={`fx-side ${sideOpen ? '' : 'hidden'}`}>
         <div className="fx-sideInner">
-          <div className="fx-sideTitle">{copy.title} / 菜单</div>
+          <div className="fx-sideTitle"><span>{copy.title} / 菜单</span><button type="button" className="fx-sideClose" aria-label="收起二级菜单" onClick={()=>setSideOpen(false)}>✕</button></div>
           <nav className="fx-secondary">
-            {moduleSections[active].map(item => <button key={item.id} type="button" aria-current={tab===item.id?'page':undefined} className={`fx-sitem ${tab === item.id ? 'active' : ''}`} onClick={() => openPage(active,item.id)}><span className="fx-ic">{item.icon}</span><span className="fx-txt">{item.label}</span></button>)}
+            {moduleSections[active].map(item => <button key={item.id} type="button" aria-current={tab===item.id?'page':undefined} className={`fx-sitem ${tab === item.id ? 'active' : ''}`} onClick={() => {openPage(active,item.id);if(window.innerWidth<=900)setSideOpen(false)}}><span className="fx-ic">{item.icon}</span><span className="fx-txt">{item.label}</span></button>)}
           </nav>
         </div>
       </aside>
 
       <main className="fx-main">
         <div className="fx-tabbar">
-          <button className="fx-menutoggle" title="展开 / 收起左侧菜单" onClick={() => setSideOpen(!sideOpen)}>☰</button>
+          <button className="fx-menutoggle" type="button" aria-label={sideOpen?'收起左侧菜单':'展开左侧菜单'} aria-expanded={sideOpen} title="展开 / 收起左侧菜单" onClick={() => setSideOpen(!sideOpen)}>☰</button>
           <div className="fx-tabstrip">
             {openTabs.map(item => <div key={item.key} className={`fx-tab ${active === item.module && tab === item.tab ? 'active' : ''}`} onClick={() => activateTab(item)}><span>{item.label}</span><button className="fx-x" title="关闭标签" onClick={e => closeTab(item.key, e)}>✕</button></div>)}
           </div>
