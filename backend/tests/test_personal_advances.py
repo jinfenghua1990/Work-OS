@@ -183,6 +183,38 @@ class PersonalAdvanceTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM expenses").fetchone()[0],0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],0)
 
+    def test_bulk_personal_payments_create_drafts_only_and_reimport_dedup(self):
+        first=self.data("bulk-one")
+        second=self.data("bulk-two")
+        first.pop("source_key")
+        second.pop("source_key")
+        second["payment_reference"]="PERSONAL-TX-002"
+        second["amount"]="300.00"
+        malformed=self.data("bulk-invalid")
+        malformed.pop("source_key")
+        malformed["paid_on"]="2026-99-99"
+        status,result=self.api.import_personal_advances({
+            "archive_file_id":self.proof,
+            "rows":[first,second,malformed]
+        })
+        self.assertEqual(status,200,result)
+        self.assertTrue(result["pending_review"])
+        self.assertFalse(result["posted_to_ledger"])
+        self.assertEqual(len(result["created"]),2,result)
+        self.assertEqual(len(result["rejected"]),1,result)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM personal_advances").fetchone()[0],2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM receivables_payables").fetchone()[0],0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM bank_transactions").fetchone()[0],0)
+        status,again=self.api.import_personal_advances({
+            "archive_file_id":self.proof,"rows":[first,second]
+        })
+        self.assertEqual(status,200,again)
+        self.assertEqual(len(again["duplicates"]),2)
+        with server.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM personal_advances").fetchone()[0],2)
+
     def test_foreign_currency_or_missing_proof_does_not_post(self):
         value=self.data();value["currency"]="EUR"
         with self.assertRaisesRegex(ValueError,"CNY"):

@@ -317,3 +317,13 @@ body{overflow:hidden}
 .personal-ledger-row button{flex-shrink:0}
 .personal-status{white-space:nowrap;font-size:12px;color:#536276}
 @media(max-width:650px){.personal-ledger-row{align-items:flex-start;flex-direction:column}}
+
+/* 个人公司业务付款：按月导入后先审核，不在公司银行池生成流水 */
+.personal-bulk{display:flex;flex-direction:column;gap:12px;padding:12px;border:1px solid #e2e8f0;border-radius:9px;background:#fafbfc}
+.personal-bulk h3{margin:0;font-size:13px}
+.personal-bulk p{margin:0;font-size:12px;color:#64748b;line-height:1.6}
+.personal-bulk-map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.personal-bulk-map label{font-size:11px;color:#607188;display:flex;flex-direction:column;gap:5px}
+.personal-bulk-map select{width:100%;min-width:0;height:32px;border:1px solid #dbe2eb;border-radius:6px;background:#fff;padding:0 8px}
+.personal-bulk-submit{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px}
+@media(max-width:700px){.personal-bulk-map{grid-template-columns:repeat(2,minmax(0,1fr))}.personal-bulk-submit{align-items:flex-start;flex-direction:column}}

@@ -75,7 +75,7 @@ function csvCells(text:string):string[][]{
   return rows
 }
 
-async function sheetRows(file:File):Promise<string[][]>{
+export async function sheetRows(file:File):Promise<string[][]>{
   if(/\.csv$/i.test(file.name))return csvCells(await file.text())
   if(!/\.xlsx$/i.test(file.name))throw new Error('只支持 CSV、XLSX')
   const response=await fetch('/api/import/preview-xlsx',{method:'POST',
