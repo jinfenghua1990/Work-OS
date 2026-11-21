@@ -21,6 +21,7 @@ import evidence_audit
 import monthly_flow
 import bank_matching
 import personal_advances
+import alsvid_finance_summary
 import finance_reconcile
 import invoice_bulk
 import local_auth
@@ -1198,6 +1199,12 @@ class Api(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
         with db() as conn:
+            if path == "/api/alsvid/finance/overview":
+                period=parse_qs(parsed.query).get("period",[date.today().strftime("%Y-%m")])[0]
+                try:
+                    return self.reply(200,alsvid_finance_summary.overview(conn,period))
+                except (ValueError,TypeError) as exc:
+                    return self.reply(422,{"error":str(exc)})
             if path == "/api/coffee/stock-cover":
                 return self.reply(200,stock_cover(conn))
             if path == "/api/archive/audit":
@@ -1708,6 +1715,14 @@ class Api(BaseHTTPRequestHandler):
             local_auth.end_session(self.headers)
             return self.reply(200,{"authenticated":False},
                               cookie=local_auth.clear_cookie())
+        # ALSVID owns purchase, receipt, sale and landed-cost business facts.
+        # Legacy creator endpoints remain GET-readable for migration/review,
+        # but must never write a second bike business ledger in Work OS.
+        if path.startswith("/api/bike/"):
+            return self.reply(410,{"error":"ALSVID business writes are disabled in Work OS. "
+                                           "Create the document in ALSVID Admin; Work OS "
+                                           "only reconciles financial records and archives.",
+                                   "code":"ALSV_BIKE_WRITES_DISABLED"})
         try:
             if path == "/api/import/preview-xlsx":
                 raw_length=self.headers.get("Content-Length","")
