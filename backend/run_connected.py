@@ -31,7 +31,7 @@ def check_configuration():
         if not server.finance_identity.ROLES:
             raise RuntimeError("具名权限设置无效")
     elif not server.local_auth.enabled() or not server.local_auth.configured_hash_valid():
-        raise RuntimeError("共享模式须启用具名用户，或保留有效的本地单人密码")
+        raise RuntimeError("共享模式需 WORKOS_AUTH_PASSWORD_HASH 或 WORKOS_AUTH_MODE=named")
     required=("WORKOS_R2_ACCOUNT_ID","WORKOS_R2_BUCKET",
               "WORKOS_R2_ACCESS_KEY_ID","WORKOS_R2_SECRET_ACCESS_KEY",
               "WORKOS_ARCHIVE_ROOT")
