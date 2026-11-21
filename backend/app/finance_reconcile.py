@@ -6,6 +6,7 @@ payment. Every amount is calculated as Decimal in the source currency.
 from __future__ import annotations
 
 from collections import defaultdict
+import invoice_red
 from datetime import datetime
 from decimal import Decimal
 
@@ -188,6 +189,7 @@ def monthly(conn,period:str)->dict:
         "FROM invoices i WHERE i.issued_on LIKE ?",(period+"-%",),
     ).fetchall()]
     invoice_result={"total":len(invoices),"unlinked":0,"partially_linked":0,
+                    "overlinked":0,"red_issued_in_period":0,
                     "tax_pending":0,"missing_evidence":0,"details":[]}
     # Exact linked totals are calculated from the original strings, not SQL
     # numeric casts which might round via floating point under SQLite.
@@ -196,11 +198,13 @@ def monthly(conn,period:str)->dict:
             "SELECT linked_amount FROM invoice_links WHERE invoice_id=?",(item["id"],),
         ).fetchall()),ZERO)
         gross=_amount(item["total_amount"])
-        if paid>gross:
-            raise ValueError("invoice linked amount exceeds face value")
-        if not paid:
+        net_info=invoice_red.net_for(conn,item["id"])
+        net=_amount(net_info["net_amount"])
+        if paid>net:
+            invoice_result["overlinked"]+=1
+        elif not paid and net>ZERO:
             invoice_result["unlinked"]+=1
-        elif paid<gross:
+        elif paid<net:
             invoice_result["partially_linked"]+=1
         if item["tax_status"]=="pending":
             invoice_result["tax_pending"]+=1
@@ -210,15 +214,39 @@ def monthly(conn,period:str)->dict:
         ).fetchone()
         if not evidence:
             invoice_result["missing_evidence"]+=1
-        if (paid<gross or not evidence) and len(invoice_result["details"])<20:
+        if (paid!=net or not evidence) and len(invoice_result["details"])<20:
             invoice_result["details"].append({
                 "id":item["id"],"number":item["invoice_number"],
                 "counterparty":item["counterparty"],"direction":item["direction"],
                 "currency":item["currency"],"face_value":_money(gross),
-                "linked_amount":_money(paid),"remaining":_money(gross-paid),
+                "net_amount":_money(net),"credited_amount":net_info["credited_amount"],
+                "linked_amount":_money(paid),"remaining":_money(net-paid),
+                "overlinked":paid>net,
                 "has_original":bool(evidence),
             })
 
+    red_rows=conn.execute(
+        "SELECT blue_invoice_id,invoice_number FROM invoice_credit_notes WHERE issued_on LIKE ?",
+        (period+"-%",)
+    ).fetchall()
+    invoice_result["red_issued_in_period"]=len(red_rows)
+    # Historical blue invoices can be overlinked by red notes in this month.
+    for red in red_rows:
+        blue_id=red["blue_invoice_id"]
+        if any(item["id"]==blue_id for item in invoices):
+            continue
+        linked=sum((_amount(r[0]) for r in conn.execute(
+            "SELECT linked_amount FROM invoice_links WHERE invoice_id=?",(blue_id,)
+        ).fetchall()),ZERO)
+        net=_amount(invoice_red.net_for(conn,blue_id)["net_amount"])
+        if linked>net:
+            invoice_result["overlinked"]+=1
+            if len(invoice_result["details"])<20:
+                invoice_result["details"].append({
+                    "id":blue_id,"red_invoice_number":red["invoice_number"],
+                    "net_amount":_money(net),"linked_amount":_money(linked),
+                    "overlinked":True,"remaining":_money(net-linked)
+                })
     coverage=conn.execute(
         "SELECT account_count FROM bank_account_coverage WHERE period=?",(period,),
     ).fetchone()
@@ -229,7 +257,8 @@ def monthly(conn,period:str)->dict:
     has_issues=bool(
         missing_statements or mismatched_balances or missing_journals or
         total_unallocated or source_missing or not coverage_valid or
-        unknown_accounts or invoice_result["missing_evidence"]
+        unknown_accounts or invoice_result["missing_evidence"] or
+        invoice_result["overlinked"]
     )
     status=("no_accounts" if not accounts else
             "review_required" if has_issues else
