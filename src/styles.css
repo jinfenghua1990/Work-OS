@@ -275,3 +275,29 @@ body{overflow:hidden}
 .simple-flow-row span:first-child,.simple-flow-head span:first-child{text-align:left}
 .simple-flow-row small{display:block;color:#818b98;font-size:11px}
 @media(max-width:700px){.simple-flow-head,.simple-flow-row{min-width:550px}}
+
+/* Work OS 财务流水三方核对 — 就地显示，不增加导航层级 */
+.finance-reconcile-panel{display:flex;flex-direction:column;gap:12px}
+.reconcile-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.reconcile-actions input{height:33px;border:1px solid #dee5ee;border-radius:6px;padding:0 8px;color:#334155;background:#fff}
+.reconcile-status{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin:0}
+.reconcile-status span{color:#66768b;font-size:11px}
+.reconcile-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.reconcile-stats>div{display:flex;flex-direction:column;gap:7px;padding:12px;border:1px solid #e4e9f0;border-radius:8px}
+.reconcile-stats small{font-size:11px;color:#687588}
+.reconcile-stats strong{font-size:17px;font-variant-numeric:tabular-nums}
+.reconcile-table-scroll{overflow:auto}
+.reconcile-table{width:100%;min-width:750px;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums}
+.reconcile-table th{text-align:right;color:#66768b;background:#f6f8fb;font-weight:600}
+.reconcile-table th:first-child{text-align:left}
+.reconcile-table th,.reconcile-table td{padding:10px 9px;border-bottom:1px solid #e9edf2}
+.reconcile-table td{text-align:right}
+.reconcile-table td:first-child{text-align:left}
+.reconcile-table td small{display:block;color:#7c8798;margin-top:3px}
+.reconcile-detail{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:8px 2px;border-bottom:1px solid #edf0f4;font-size:11px}
+.reconcile-detail span{min-width:0}
+.reconcile-detail small{display:block;color:#7e8997;margin-top:4px;overflow-wrap:anywhere}
+.reconcile-detail strong{white-space:nowrap;font-variant-numeric:tabular-nums}
+.reconcile-notice{padding:10px 12px;border-radius:7px;border:1px solid #e5e7eb;margin:0;font-size:11px;color:#475569}
+.reconcile-footnote{color:#64748b;font-size:11px}
+@media(max-width:850px){.reconcile-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.reconcile-status{align-items:flex-start;flex-direction:column}}
