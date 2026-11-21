@@ -7,6 +7,7 @@ type FinanceIssue={
 }
 type AlsvidOverview={
   period:string;read_only:boolean
+  period_scope:{cash:string;invoice:string;payables:string;personal_reimbursements:string;note:string}
   integration:{connected:boolean;status:string;last_verified_sync:string|null;
     contract_version:string;source_of_truth:string;note:string}
   business:{purchase_order_count:number|null;sales_order_count:number|null;
@@ -90,9 +91,9 @@ export function AlsvidFinanceWorkspace({
           <span>仅计算已核销至 ALSVID 往来的金额</span></div>
         <div className="panel"><small>已关联银行收款（按币种）</small><strong>{money(data.financial.cash_received)}</strong>
           <span>不等于当期销售收入</span></div>
-        <div className="panel"><small>已归集未付应付款</small><strong>{money(data.financial.accounts_payable)}</strong>
+        <div className="panel"><small>当前已归集未付应付款</small><strong>{money(data.financial.accounts_payable)}</strong>
           <span>Work OS 已识别的 ALSVID 往来</span></div>
-        <div className="panel"><small>已归集应收款</small><strong>{money(data.financial.accounts_receivable)}</strong>
+        <div className="panel"><small>当前已归集应收款</small><strong>{money(data.financial.accounts_receivable)}</strong>
           <span>不包含未接入的 ALSVID 业务</span></div>
       </div>
       <section className="panel">
@@ -114,7 +115,7 @@ export function AlsvidFinanceWorkspace({
             <div><small>个人待报销</small><strong>{data.financial.personal_pending_reimbursement}</strong></div>
             <div><small>待确认发票税务状态</small><strong>{data.financial.invoices.tax_pending}</strong></div>
           </div>
-          <p className="alsvid-subnote">个人垫付待报销：CNY {data.financial.personal_outstanding_cny}。处理入口统一在财务中心。</p>
+          <p className="alsvid-subnote">当前个人垫付待报销：CNY {data.financial.personal_outstanding_cny}。处理入口统一在财务中心；当前余额不等于所选月份的历史期末余额。</p>
         </section>
         <section className="panel"><h2>Work OS 已记账参考（CNY）</h2>
           <div className="alsvid-summary-grid">
@@ -123,11 +124,12 @@ export function AlsvidFinanceWorkspace({
             <div><small>经营费用</small><strong>{data.financial.ledger_reference_cny.operating_expenses_cny}</strong></div>
             <div><small>参考损益</small><strong>{data.financial.ledger_reference_cny.reference_margin_cny}</strong></div>
           </div>
-          <p className="alsvid-subnote">仅历史已归集分录，非完整 ALSVID 月度利润，不能据此做最终经营结论。</p>
+          <p className="alsvid-subnote">仅所选月份已归集分录，非完整 ALSVID 月度利润，不能据此做最终经营结论。</p>
         </section>
       </div>
     </>:tab==='activity'?<>
       <section className="panel"><h2>银行、应收应付、发票对照</h2>
+        <p className="alsvid-subnote">{data.period_scope.note}</p>
         <div className="alsvid-summary-grid">
           <div><small>银行已核销</small><strong>{data.financial.bank_allocation_count} 次</strong></div>
           <div><small>已关联财务发票</small><strong>{data.financial.invoices.input+data.financial.invoices.output} 张</strong></div>

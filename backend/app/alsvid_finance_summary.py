@@ -38,11 +38,16 @@ def _period(value:str)->str:
     return value
 
 
-def _bike_item(source_type:str, source_id:str|None, personal_bike:set[str])->bool:
+def _bike_item(
+    source_type:str, source_id:str|None, personal_bike:set[str],
+    bike_expenses:set[str]|None=None,
+)->bool:
+    """Attribute a financial item by its origin ID, never by payee or amount."""
     return (
         source_type in ("bike_milestone","bike_landed_cost","bike_sale","bike_receipt")
         or source_type.startswith("alsvid_")
         or (source_type=="personal_advance" and source_id in personal_bike)
+        or (source_type=="operating_expense" and source_id in (bike_expenses or set()))
     )
 
 
@@ -57,6 +62,14 @@ def overview(conn,period:str)->dict:
         "WHERE p.business_line='bike' ORDER BY p.paid_on DESC,p.id DESC"
     ).fetchall()]
     personal_ids={x["id"] for x in personal}
+    # Financial expenses made in Work OS can also belong to the bike business.
+    # In particular, personal-paid merchant invoices link to their
+    # operating_expense supplier payable, not to the employee payable.
+    bike_expense_ids={row["id"] for row in conn.execute(
+        "SELECT id FROM expenses WHERE business_line='bike'"
+    ).fetchall()}
+    def belongs(source_type:str,source_id:str|None)->bool:
+        return _bike_item(source_type,source_id,personal_ids,bike_expense_ids)
     issues=[]
     def flag(key,title,detail="",reference="",priority="attention",scope="alsvid"):
         issues.append({"code":key,"title":title,"detail":detail,
@@ -98,7 +111,7 @@ def overview(conn,period:str)->dict:
         "WHERE direction IN ('payable','receivable') ORDER BY created_at DESC,id DESC"
     ).fetchall():
         x=dict(row)
-        if _bike_item(x["source_type"],x["source_id"],personal_ids):
+        if belongs(x["source_type"],x["source_id"]):
             open_items.append(x)
 
     payables=defaultdict(lambda:ZERO)
@@ -108,6 +121,7 @@ def overview(conn,period:str)->dict:
     linked_invoice_by_item=set()
     missing_originals=0
     allocation_count=0
+    checked_bank_files=set()
     for row in conn.execute(
         "SELECT a.bank_transaction_id,a.target_id,a.amount,"
         "b.transaction_on,b.direction,b.currency,b.bank_reference,"
@@ -119,18 +133,23 @@ def overview(conn,period:str)->dict:
         (period+"-%",),
     ).fetchall():
         x=dict(row)
-        if not _bike_item(x["source_type"],x["source_id"],personal_ids):
+        if not belongs(x["source_type"],x["source_id"]):
             continue
         allocation_count+=1
         (received if x["direction"]=="in" else paid)[x["currency"]]+=_money(x["amount"])
-        has_original=conn.execute(
-            "SELECT 1 FROM archive_links WHERE source_system='finance.bank_transaction' "
-            "AND source_document_id=? LIMIT 1",(x["bank_transaction_id"],),
-        ).fetchone()
-        if not has_original:
-            missing_originals+=1
-            flag("bank_original_missing","已归属 ALSVID 的银行流水缺原件关联",
-                x["bank_reference"],x["bank_transaction_id"],"attention")
+        # One bank transaction can cover multiple ALSVID invoice/order
+        # obligations; audit its evidence once, not once per allocation.
+        if x["bank_transaction_id"] not in checked_bank_files:
+            checked_bank_files.add(x["bank_transaction_id"])
+            has_original=conn.execute(
+                "SELECT 1 FROM archive_links "
+                "WHERE source_system='finance.bank_transaction' "
+                "AND source_document_id=? LIMIT 1",(x["bank_transaction_id"],),
+            ).fetchone()
+            if not has_original:
+                missing_originals+=1
+                flag("bank_original_missing","已归属 ALSVID 的银行流水缺原件关联",
+                     x["bank_reference"],x["bank_transaction_id"],"attention")
 
     for x in open_items:
         amount=_money(x["original_amount"])
@@ -164,7 +183,7 @@ def overview(conn,period:str)->dict:
             "WHERE l.invoice_id=?",(x["id"],),
         ).fetchall()]
         matched_links=[z for z in links if z["source_type"] and
-                       _bike_item(z["source_type"],z["source_id"],personal_ids)]
+                       belongs(z["source_type"],z["source_id"])]
         direct=str(x["source_system"] or "").casefold() in ("alsvid","alsvid_admin","alsvid-admin")
         if not direct and not matched_links:
             continue
@@ -174,10 +193,13 @@ def overview(conn,period:str)->dict:
         invoice_counts["input" if x["direction"]=="purchase" else "output"]+=1
         if x["tax_status"]=="pending":
             invoice_counts["tax_pending"]+=1
-        if not links:
+        if not matched_links:
             invoice_counts["without_business_link"]+=1
-            flag("invoice_unlinked","ALSVID 发票尚未关联业务单据",
+            flag("invoice_unlinked","ALSVID 发票尚未关联 ALSVID 业务单据",
                  x["invoice_number"],x["id"])
+        if direct and not x["source_document_id"]:
+            flag("invoice_source_identity_missing","ALSVID 发票缺少外部唯一业务 ID",
+                 x["invoice_number"],x["id"],"attention")
         if len(matched_links)<len(links):
             flag("invoice_cross_project","发票关联了不属于 ALSVID 的往来",
                  x["invoice_number"],x["id"],"blocking")
@@ -247,7 +269,14 @@ def overview(conn,period:str)->dict:
     priority={"blocking":0,"attention":1,"info":2}
     issues.sort(key=lambda x:(priority.get(x["priority"],3),x["code"],x["reference"]))
     return {
-        "period":period,"integration":{
+        "period":period,
+        "period_scope":{
+            "cash":"selected_month","invoice":"selected_month",
+            "payables":"current_outstanding_not_historical_month_end",
+            "personal_reimbursements":"current_outstanding_not_historical_month_end",
+            "note":"银行收支、发票和分录按选择月份；应收应付及个人报销余额为当前未结（不是该月月底历史快照）。"
+        },
+        "integration":{
             "connected":False,"status":"not_connected",
             "last_verified_sync":None,"contract_version":"alsvid-finance-v1",
             "source_of_truth":"ALSVID Admin",
@@ -269,7 +298,7 @@ def overview(conn,period:str)->dict:
             "personal_outstanding_cny":_format(personal_open),
             "ledger_reference_cny":{key:_format(amount) for key,amount in ledger.items()},
             "ledger_reference_complete":False,
-            "scope":"仅 Work OS 已确认属于 ALSVID 的财务记录；不含 ALSVID 尚未同步的订单、付款、销售和成本。"
+            "scope":"仅 Work OS 已确认属于 ALSVID 的财务记录；银行收支、发票、分录按所选月份，应收应付及报销为当前余额；不含 ALSVID 尚未同步业务。"
         },
         "exceptions":{"total":len(issues),"blocking":sum(1 for x in issues if x["priority"]=="blocking"),
                       "items":issues[:100],"truncated":len(issues)>100},
