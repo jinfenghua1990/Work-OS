@@ -24,6 +24,7 @@ import personal_advances
 import alsvid_finance_summary
 import finance_reconcile
 import invoice_bulk
+import invoice_red
 import local_auth
 import xlsx_reader
 import exhibition_assets
@@ -60,7 +61,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 43
+LATEST_SCHEMA_VERSION = 44
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -310,6 +311,13 @@ def init_db() -> None:
                 version = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"]
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
+                    return
+                if version is not None and int(version)==43:
+                    conn.execute("BEGIN")
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
                     return
                 if version is not None and int(version)==42:
                     conn.execute("BEGIN")
@@ -947,6 +955,8 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)", (now(),))
         personal_advances.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)", (now(),))
+        invoice_red.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1651,7 +1661,11 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(200, transactions)
             if path == "/api/invoices":
                 rows = conn.execute("SELECT i.*,COALESCE((SELECT SUM(l.linked_amount) FROM invoice_links l WHERE l.invoice_id=i.id),'0.00') AS linked_amount FROM invoices i ORDER BY i.issued_on DESC,i.created_at DESC").fetchall()
-                return self.reply(200, [dict(row) for row in rows])
+                return self.reply(200, [{**dict(row),**invoice_red.net_for(conn,row["id"])} for row in rows])
+            if path == "/api/invoices/red":
+                return self.reply(200, invoice_red.list_credit_notes(conn))
+            if path == "/api/tax/rates":
+                return self.reply(200, invoice_red.list_rates(conn))
             if path == "/api/purchases":
                 rows = conn.execute("SELECT * FROM purchases ORDER BY created_at DESC").fetchall()
                 result=[]
@@ -1785,6 +1799,16 @@ class Api(BaseHTTPRequestHandler):
                 return self.classify_cash_flow(data)
             if path == "/api/invoices":
                 return self.create_invoice(data)
+            if path == "/api/invoices/red":
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    result=invoice_red.register_credit(conn,data,ensure_open,now,original_archive.link_document)
+                return self.reply(200 if result["duplicate"] else 201,result)
+            if path == "/api/tax/rates":
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    result=invoice_red.register_rate(conn,data,ensure_open,now)
+                return self.reply(200 if result["duplicate"] else 201,result)
             if path == "/api/invoices/import":
                 return self.import_invoices(data)
             if path == "/api/personal-advances":
@@ -3647,7 +3671,7 @@ class Api(BaseHTTPRequestHandler):
             ensure_open(conn,invoice["issued_on"])
             used = sum((Decimal(x[0]) for x in conn.execute("SELECT linked_amount FROM invoice_links WHERE invoice_id=?", (invoice_id,))), Decimal(0))
             target_used = sum((Decimal(x[0]) for x in conn.execute("SELECT linked_amount FROM invoice_links WHERE target_type=? AND target_id=?", (target_type,target_id))), Decimal(0))
-            if used + value > Decimal(invoice["total_amount"]) or target_used + value > Decimal(target["original_amount"]):
+            if used + value > Decimal(invoice_red.net_for(conn,invoice_id)["net_amount"]) or target_used + value > Decimal(target["original_amount"]):
                 raise ValueError("links exceed invoice total or linked business item amount")
             conn.execute("INSERT INTO invoice_links VALUES(?,?,?,?,?,?)", (str(uuid4()), invoice_id, target_type, target_id, str(value), now()))
             response={"invoice_id": invoice_id, "linked_amount": str(value), "tax_status": invoice["tax_status"], "tax_credit_recognized": False, "accounting_effect": "none"}
@@ -3729,8 +3753,8 @@ def postgres_schema_status() -> dict:
         raise RuntimeError("schema preflight only supports WORKOS_DB_BACKEND=postgres")
     critical = (
         "purchases", "stock_layers", "sales_imports",
-        "bank_transactions", "invoices", "journal_entries", "journal_lines",
-        "personal_advances",
+        "bank_transactions", "invoices", "invoice_credit_notes", "tax_rate_rules",
+        "journal_entries", "journal_lines", "personal_advances",
         "archive_files", "archive_links", "sample_dispositions",
         "evidence.original_documents", "evidence.row_snapshots",
         "evidence.import_batches",
