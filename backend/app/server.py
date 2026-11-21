@@ -18,6 +18,7 @@ import original_archive
 import evidence_db
 import r2_evidence
 import evidence_audit
+import monthly_flow
 import bank_matching
 import invoice_bulk
 import local_auth
@@ -1454,6 +1455,12 @@ class Api(BaseHTTPRequestHandler):
                 if conn.execute("SELECT 1 FROM period_locks WHERE period=?",(period,)).fetchone():
                     return self.reply(409,{"error":"accounting period is already closed"})
                 return self.reply(200,period_close_readiness(conn,period))
+            if path == "/api/reports/flow-summary":
+                period=parse_qs(parsed.query).get("period",[date.today().isoformat()[:7]])[0]
+                try:
+                    return self.reply(200,monthly_flow.report(conn,period))
+                except (ValueError,TypeError) as exc:
+                    return self.reply(422,{"error":str(exc)})
             if path == "/api/reports/operating":
                 period = parse_qs(parsed.query).get("period", [date.today().strftime("%Y-%m")])[0]
                 filters = parse_qs(parsed.query)

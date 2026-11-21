@@ -268,3 +268,10 @@ body{overflow:hidden}
 .invoice-batch-mapping select{height:33px;width:100%;min-width:0;padding:0 8px;border:1px solid #e3e8ef;background:#fff;border-radius:6px;color:#334155}
 .invoice-batch-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0}
 @media(max-width:700px){.invoice-batch-mapping{grid-template-columns:repeat(2,minmax(125px,1fr))}.bank-match-row{align-items:flex-start;flex-direction:column}}
+
+/* 简单月度资金/票据报告，币种不混算 */
+.simple-flow-head,.simple-flow-row{grid-template-columns:minmax(54px,.6fr) repeat(4,minmax(100px,1fr));gap:10px;align-items:center}
+.simple-flow-row span,.simple-flow-row strong{font-variant-numeric:tabular-nums;text-align:right}
+.simple-flow-row span:first-child,.simple-flow-head span:first-child{text-align:left}
+.simple-flow-row small{display:block;color:#818b98;font-size:11px}
+@media(max-width:700px){.simple-flow-head,.simple-flow-row{min-width:550px}}
