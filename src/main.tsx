@@ -166,6 +166,7 @@ function App() {
   const [apiOnline, setApiOnline] = useState(false)
   const [lastRefreshAt,setLastRefreshAt]=useState<Date|null>(null)
   const copy = moduleCopy[active]
+  const activePageKey = `${active}|${tab}`
   async function refreshData() {
     try {
       const [health, inv, movement, po, op, expenseRows, projectRows, samples, bike, bikeCostRows, bikeSaleRows, bank, invoice, periods, operating, journals, rules,safety] = await Promise.all([fetch('/api/health'),fetch('/api/inventory'),fetch('/api/movements'),fetch('/api/purchases'),fetch('/api/receivables-payables'),fetch('/api/expenses'),fetch('/api/projects'),fetch('/api/projects/samples'),fetch('/api/bike/orders'),fetch('/api/bike/landed-costs'),fetch('/api/bike/sales'),fetch('/api/bank/transactions'),fetch('/api/invoices'),fetch('/api/periods'),fetch(`/api/reports/operating?period=${currentPeriod}`),fetch('/api/journals'),fetch('/api/packaging-rules'),fetch('/api/inventory/safety-stock')])
@@ -212,7 +213,7 @@ function App() {
   return <div className="fx-shell">
     <header className="fx-topbar">
       <button className="fx-brand" onClick={() => openPage('overview','overview')} aria-label="回到经营总览"><span className="fx-logo">🤝</span><span className="fx-brandname">workOS · 经营工作台</span></button>
-      <div className="fx-brandpick" title="当前本地账套"><span className="fx-bp-logo">🏷</span><span className="fx-bp-name">本地工作账套</span><span className="fx-bp-arrow">▾</span></div>
+      <div className="fx-brandpick" title="当前 Work OS 账套"><span className="fx-bp-logo">🏷</span><span className="fx-bp-name">统一经营账套</span></div>
       <nav className="fx-primary" aria-label="一级导航">
         {modules.map(item => <button key={item.id} className={`fx-pitem ${active === item.id ? 'active' : ''}`} onClick={() => navigate(item.id)}><span className="fx-ic">{moduleIconEmoji[item.id]}</span><span>{item.label}</span></button>)}
       </nav>
@@ -246,14 +247,19 @@ function App() {
           </div>
         </div>
         <div className="fx-frames">
-          <div className="fx-frame active">
+          {openTabs.map(page => {
+            const active = page.module
+            const tab = page.tab
+            const copy = moduleCopy[active]
+            const isCurrentPage = page.key === activePageKey
+            return <div key={page.key} className={`fx-frame ${isCurrentPage ? 'active' : ''}`} style={{display:isCurrentPage?'block':'none'}} aria-hidden={!isCurrentPage}>
             <div className="main-content">
-      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{modules.find(item => item.id === active)?.label}</span><span className="crumb-slash">/</span><span>{sectionLabel(active,tab)}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> 本地工作账套</span></div>
-      <section className="welcome-row"><div><div className="eyebrow"><span className="eyebrow-line"/>{copy.eyebrow}</div><h1>{copy.title}</h1><p className="welcome-desc">{copy.desc}</p></div><button className="primary-button" onClick={() => setDrawer(true)}><Plus size={17}/> 新建业务单据</button></section>
+      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{modules.find(item => item.id === active)?.label}</span><span className="crumb-slash">/</span><span>{sectionLabel(active,tab)}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> 统一经营账套</span></div>
+      <section className="welcome-row"><div><div className="eyebrow"><span className="eyebrow-line"/>{copy.eyebrow}</div><h1>{sectionLabel(active,tab)}</h1><p className="welcome-desc">{copy.desc}</p></div><button className="primary-button" onClick={() => setDrawer(true)}><Plus size={17}/> 新建业务单据</button></section>
 
 
 
-      {active === 'coffee' ? <CoffeeWorkspace inventory={inventory} safetyStocks={safetyStocks} movements={inventoryMovements} purchases={purchases} packagingRules={packagingRules} apiOnline={apiOnline} refresh={refreshData} quickCreate={quickCreate} onQuickCreateHandled={()=>setQuickCreate(null)} subtab={tab as CoffeePage} onSubtabChange={next=>openPage('coffee',next)}/> : active === 'bike' ? <BikeWorkspace orders={bikeOrders} costs={bikeCosts} sales={bikeSales} tab={tab} refresh={refreshData}/> : active === 'finance' ? <FinanceWorkspace projects={projects} openItems={openItems} expenses={expenses} bankRows={bankRows} invoices={invoices} journalEntries={journalEntries} operatingReport={operatingReport} currentPeriod={currentPeriod} refresh={refreshData} section={tab as FinancePage} /> : active==='exhibition'?<ExhibitionWorkspace projects={projects} expenses={expenses} inventory={inventory} packagingRules={packagingRules} sampleDispatches={sampleDispatches} tab={tab} refresh={refreshData}/>: active === 'overview' && tab === 'overview' ? <>
+      {active === 'coffee' ? <CoffeeWorkspace inventory={inventory} safetyStocks={safetyStocks} movements={inventoryMovements} purchases={purchases} packagingRules={packagingRules} apiOnline={apiOnline} refresh={refreshData} quickCreate={isCurrentPage?quickCreate:null} onQuickCreateHandled={()=>setQuickCreate(null)} subtab={tab as CoffeePage} onSubtabChange={next=>openPage('coffee',next)}/> : active === 'bike' ? <BikeWorkspace orders={bikeOrders} costs={bikeCosts} sales={bikeSales} tab={tab} refresh={refreshData}/> : active === 'finance' ? <FinanceWorkspace projects={projects} openItems={openItems} expenses={expenses} bankRows={bankRows} invoices={invoices} journalEntries={journalEntries} operatingReport={operatingReport} currentPeriod={currentPeriod} refresh={refreshData} section={tab as FinancePage} /> : active==='exhibition'?<ExhibitionWorkspace projects={projects} expenses={expenses} inventory={inventory} packagingRules={packagingRules} sampleDispatches={sampleDispatches} tab={tab} refresh={refreshData}/>: active === 'overview' && tab === 'overview' ? <>
         <section className="metric-grid" aria-label="经营关键指标">
           <Metric title="本月销售收入" value={apiOnline&&operatingReport?`${operatingReport.currency} ${Number(operatingReport.sales_revenue).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`:'—'} change={operatingReport?.period===currentPeriod?'按本期已过账分录':'等待本地 API 连接'} trend={apiOnline?'neutral':'warning'} icon={ArrowUpRight} caption="权责发生制确认的销售收入" chart={[]} />
           <Metric title="本月销售毛利" value={apiOnline&&operatingReport?`${operatingReport.currency} ${Number(operatingReport.gross_profit).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`:'—'} change={operatingReport?.period===currentPeriod?'收入减 FIFO 销售成本':'等待本地 API 连接'} trend={apiOnline?'neutral':'warning'} icon={Activity} caption="费用按已登记事实计算；完整性需在财务中心核对" chart={[]} tone="green" />
@@ -271,7 +277,8 @@ function App() {
         <footer className="footer-note"><span><Sparkles size={13}/> 经营数字以业务确认和月结结果为准</span><span>{apiOnline?lastRefreshAt?`本地数据刷新于 ${lastRefreshAt.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}`:'已连接本地 API':lastRefreshAt?`本地 API 离线 · 上次刷新 ${lastRefreshAt.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}`:'本地 API 离线'} <i className={`refresh-dot ${apiOnline?'':'offline'}`}/></span></footer>
       </> : tab==='actions'?<section className="panel todo-workspace"><div className="panel-heading"><div><h2>待我处理</h2><p>任务由当前本地银行流水、往来余额和发票状态计算。</p></div><button className="todo-total">{apiOnline?todoCount:'—'}</button></div>{!apiOnline?<div className="empty-state"><Activity size={22}/><strong>待办暂不可用</strong><span>本地 API 离线。</span></div>:todoGroups.length===0?<div className="empty-state"><Check size={22}/><strong>当前没有待办</strong><span>待认领流水、汇率复核、逾期往来和税务状态均为零。</span></div>:<div className="todo-list">{todoGroups.map(task=><button className="todo-item" key={task.key} onClick={()=>openPage('finance',task.key==='fx'||task.key==='overdue'?'items':task.key==='tax'?'invoices':'bank')}><span className={`todo-icon ${task.tint}`}><task.icon size={15}/></span><span className="todo-copy"><strong>{task.label}</strong><small>{task.detail}</small></span><span className="todo-count">{task.count} 项</span><ArrowRight size={14} className="todo-arrow"/></button>)}</div>}</section>:tab==='activity'?<ActivityTimeline items={visibleItems} query={query} onQueryChange={setQuery}/>:<section className="panel tab-placeholder"><span className="placeholder-icon"><Activity size={21}/></span><h2>{sectionLabel(active,tab)}</h2><p>当前页面尚无可展示内容。</p><button className="secondary-button" onClick={() => openPage('overview','overview')}>回到经营总览</button></section>}
             </div>
-          </div>
+            </div>
+          })}
         </div>
       </main>
     </div>
