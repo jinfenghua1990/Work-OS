@@ -6,7 +6,6 @@ confirm a suggestion via the existing, idempotent /api/bank/allocate endpoint.
 from __future__ import annotations
 
 import re
-from collections import Counter
 from decimal import Decimal, InvalidOperation
 
 
@@ -23,8 +22,14 @@ def _identity(value: object) -> str:
 
 
 def propose(bank_rows: list[dict], open_items: list[dict]) -> list[dict]:
-    """Only offer fully unambiguous, same-currency, exactly equal matches."""
+    """Offer single-target partial payments only when the whole batch is safe.
+
+    Multiple bank instalments may match one receivable/payable, but the total
+    proposed amount must not exceed its current unpaid original-currency
+    amount. Multiple candidate business items always require manual review.
+    """
     proposals=[]
+    outstanding_by_target={}
     for bank in bank_rows:
         total=_money(bank.get("amount"))
         used=_money(bank.get("allocated_amount","0"))
@@ -50,10 +55,12 @@ def propose(bank_rows: list[dict], open_items: list[dict]) -> list[dict]:
             if original is None or settled is None or carrying is None:
                 continue
             due=original-settled
-            if due==available and due>0:
+            if 0<available<=due:
                 candidates.append(item)
+                outstanding_by_target[item["id"]]=due
         if len(candidates)==1:
             item=candidates[0]
+            due=outstanding_by_target[item["id"]]
             proposals.append({
                 "bank_transaction_id":bank["id"],
                 "bank_reference":bank["bank_reference"],
@@ -66,11 +73,15 @@ def propose(bank_rows: list[dict], open_items: list[dict]) -> list[dict]:
                 "amount":str(available),
                 "confidence":"high",
                 "requires_confirmation":True,
-                "reason":"收付方向、币种、未结金额完全一致，银行摘要包含往来单位名称",
+                "is_partial":available<due,
+                "reason":"往来单位、收付方向、币种一致；金额不超过未结余额，需人工确认",
             })
-    # A payable should not be recommended against multiple bank rows.
-    matches_per_item=Counter(result["target_id"] for result in proposals)
-    return [row for row in proposals if matches_per_item[row["target_id"]]==1]
+    # Do not recommend a batch if two apparently valid bank rows could cause
+    # overpayment to the same receivable/payable. Never silently choose one.
+    sums={}
+    for row in proposals:
+        sums[row["target_id"]]=sums.get(row["target_id"],Decimal(0))+Decimal(row["amount"])
+    return [row for row in proposals if sums[row["target_id"]]<=outstanding_by_target[row["target_id"]]]
 
 
 def from_database(conn,limit:int=200) -> dict:
@@ -78,12 +89,26 @@ def from_database(conn,limit:int=200) -> dict:
         raise ValueError("match limit must be between 1 and 500")
     banks=[dict(row) for row in conn.execute(
         "SELECT b.id,b.bank_reference,b.transaction_on,b.description,b.direction,"
-        "b.amount,b.currency,b.base_amount_cny,"
-        "COALESCE((SELECT SUM(CAST(a.amount AS NUMERIC)) FROM bank_allocations a "
-        "WHERE a.bank_transaction_id=b.id),0) AS allocated_amount "
-        "FROM bank_transactions b ORDER BY b.transaction_on DESC,b.id DESC LIMIT ?",
+        "b.amount,b.currency,b.base_amount_cny "
+        "FROM bank_transactions b LEFT JOIN period_locks p "
+        "ON p.period=substr(b.transaction_on,1,7) "
+        "WHERE p.period IS NULL "
+        "ORDER BY b.transaction_on DESC,b.id DESC LIMIT ?",
         (limit,),
     ).fetchall()]
+    # Do not sum currency amounts in a SQL floating-point accumulator.
+    if banks:
+        ids=[bank["id"] for bank in banks]
+        placeholders=",".join("?" for _ in ids)
+        totals={}
+        for allocation in conn.execute(
+            f"SELECT bank_transaction_id,amount FROM bank_allocations "
+            f"WHERE bank_transaction_id IN ({placeholders})",ids
+        ).fetchall():
+            key=allocation["bank_transaction_id"]
+            totals[key]=totals.get(key,Decimal(0))+Decimal(str(allocation["amount"]))
+        for bank in banks:
+            bank["allocated_amount"]=str(totals.get(bank["id"],Decimal(0)))
     items=[dict(row) for row in conn.execute(
         "SELECT r.id,r.counterparty,r.direction,r.original_amount,r.settled_amount,"
         "r.currency,f.original_amount_cny "
