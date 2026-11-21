@@ -11,7 +11,7 @@ type RedInvoice={
   currency:string;reason:string;blue_tax_status:string
 }
 type TaxRule={
-  rate_code:string;valid_from:string;valid_to:string|null;rate_percent:string;
+  rate_code:string;valid_from:string;valid_to:string|null;effective_valid_to?:string|null;rate_percent:string;
   description:string;source_reference:string;created_by:string
 }
 type Sender=(path:string,payload:unknown)=>Promise<unknown>
@@ -157,7 +157,7 @@ export function InvoiceRedTaxControls({
       <div className="data-table">
         {rates.map(item=><div className="data-row" key={item.rate_code+item.valid_from}>
           <strong>{item.rate_code}</strong><span>{item.rate_percent}%</span>
-          <span>{item.valid_from} — {item.valid_to||'持续有效'}</span>
+          <span>{item.valid_from} — {item.effective_valid_to??item.valid_to??'持续有效'}</span>
           <span>{item.description}</span><small>{item.source_reference} · {item.created_by}</small>
         </div>)}
         {!rates.length&&<div className="empty-state">暂无税率版本；不自动填充未经核实的税率。</div>}
