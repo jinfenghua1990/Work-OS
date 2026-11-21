@@ -64,7 +64,7 @@ def fetch_snapshot(url:str,which:str)->dict:
             url,autocommit=True,sslmode="require",
             connect_timeout=12,
         ) as conn:
-            conn.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            conn.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             try:
                 if which=="alsvid":
                     if not _query(conn,
