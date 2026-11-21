@@ -19,6 +19,7 @@ BUSINESS_SOURCES = {
     "coffee.purchase": ("purchases", "id"),
     "bike.sale": ("bike_sales", "id"),
     "finance.invoice": ("invoices", "id"),
+    "finance.invoice.red": ("invoice_credit_notes", "id"),
     "finance.bank_transaction": ("bank_transactions", "id"),
 }
 
