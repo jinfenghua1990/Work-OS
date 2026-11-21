@@ -20,6 +20,7 @@ import r2_evidence
 import evidence_audit
 import monthly_flow
 import bank_matching
+import personal_advances
 import finance_reconcile
 import invoice_bulk
 import local_auth
@@ -58,7 +59,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 42
+LATEST_SCHEMA_VERSION = 43
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -309,10 +310,19 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version)==42:
+                    conn.execute("BEGIN")
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version)==41:
                     conn.execute("BEGIN")
                     r2_evidence.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -934,6 +944,8 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)", (now(),))
         r2_evidence.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)", (now(),))
+        personal_advances.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1371,6 +1383,8 @@ class Api(BaseHTTPRequestHandler):
             if path == "/api/receivables-payables":
                 rows = conn.execute("SELECT r.*,f.original_amount_cny,f.settled_amount_cny,f.exchange_rate AS book_exchange_rate,f.rate_date AS book_rate_date,f.rate_source AS book_rate_source FROM receivables_payables r LEFT JOIN open_item_fx f ON f.item_id=r.id ORDER BY r.created_at DESC").fetchall()
                 return self.reply(200, [dict(row) for row in rows])
+            if path == "/api/personal-advances":
+                return self.reply(200,personal_advances.list_claims(conn))
             if path == "/api/expenses":
                 rows = conn.execute("SELECT * FROM expenses ORDER BY incurred_on DESC,created_at DESC").fetchall()
                 allocations_by_expense: dict[str, Decimal] = {}
@@ -1758,6 +1772,10 @@ class Api(BaseHTTPRequestHandler):
                 return self.create_invoice(data)
             if path == "/api/invoices/import":
                 return self.import_invoices(data)
+            if path == "/api/personal-advances":
+                return self.create_personal_advance(data)
+            if path == "/api/personal-advances/approve":
+                return self.approve_personal_advance(data)
             if path == "/api/expenses":
                 return self.create_expense(data)
             if path == "/api/expenses/reconciliation/source":
@@ -2406,6 +2424,18 @@ class Api(BaseHTTPRequestHandler):
             result={"period":period,"coverage_confirmed":status["coverage_confirmed"],"complete":status["complete"]}
             save_expense_reconciliation_request(conn,action_key,"coverage",payload,result)
             return self.reply(201,result)
+
+    def create_personal_advance(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=personal_advances.draft(conn,data,now)
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def approve_personal_advance(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=personal_advances.approve(conn,data,now,ensure_open,journal)
+        return self.reply(200 if result["duplicate"] else 201,result)
 
     def create_expense(self, data: dict) -> None:
         source_key = str(data.get("source_key", "")).strip()
@@ -3677,6 +3707,7 @@ def postgres_schema_status() -> dict:
     critical = (
         "purchases", "stock_layers", "sales_imports",
         "bank_transactions", "invoices", "journal_entries", "journal_lines",
+        "personal_advances",
         "archive_files", "archive_links", "sample_dispositions",
         "evidence.original_documents", "evidence.row_snapshots",
         "evidence.import_batches",
