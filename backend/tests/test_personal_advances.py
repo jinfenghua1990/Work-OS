@@ -64,13 +64,20 @@ class PersonalAdvanceTests(unittest.TestCase):
         self.assertTrue(again["duplicate"])
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM expenses").fetchone()[0],1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],1)
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM receivables_payables").fetchone()[0],1)
-            person=conn.execute("SELECT * FROM receivables_payables").fetchone()
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0],2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM receivables_payables").fetchone()[0],2)
+            person=conn.execute("SELECT * FROM receivables_payables WHERE source_type='personal_advance'").fetchone()
             self.assertEqual(person["counterparty"],"李晓明")
             self.assertEqual(person["source_type"],"personal_advance")
             expense=conn.execute("SELECT * FROM expenses").fetchone()
             self.assertEqual(expense["counterparty"],"某供应商")
+            supplier=conn.execute(
+                "SELECT counterparty,original_amount,settled_amount FROM receivables_payables "
+                "WHERE id=?",(approved["vendor_payable_id"],)
+            ).fetchone()
+            self.assertEqual(supplier["counterparty"],"某供应商")
+            self.assertEqual(supplier["original_amount"],"120.00")
+            self.assertEqual(supplier["settled_amount"],"120.00")
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM archive_links").fetchone()[0],1)
             before=conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()[0]
         self.api.create_bank_account({"account_name":"公司公账","currency":"CNY"})
@@ -89,6 +96,19 @@ class PersonalAdvanceTests(unittest.TestCase):
                             "amount":"120.00"}],
         })
         self.assertEqual(status,201,paid)
+        # The tax invoice is issued by the vendor, not the individual.
+        status,invoice=self.api.create_invoice({
+            "source_key":"invoice-vendor-001","invoice_number":"00001234",
+            "direction":"purchase","counterparty":"某供应商","issued_on":"2026-11-18",
+            "total_amount":"120.00","tax_amount":"0","currency":"CNY",
+            "exchange_rate":"1","archive_file_id":self.proof,
+        })
+        self.assertEqual(status,201,invoice)
+        status,linked=self.api.link_invoice({
+            "invoice_id":invoice["id"],"target_type":"payable",
+            "target_id":approved["vendor_payable_id"],"amount":"120.00",
+        })
+        self.assertEqual(status,201,linked)
         with server.db() as conn:
             state=conn.execute("SELECT * FROM receivables_payables WHERE id=?",
                                (approved["employee_payable_id"],)).fetchone()
