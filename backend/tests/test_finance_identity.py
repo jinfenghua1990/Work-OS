@@ -72,6 +72,25 @@ class NamedFinanceApprovalTests(unittest.TestCase):
         self.assertTrue(finance_identity.can_write(self.clerk,"/api/personal-advances"))
         self.assertTrue(finance_identity.can_write(self.approver,"/api/personal-advances/approve"))
         self.assertFalse(finance_identity.can_approve(self.clerk))
+        # Tax policy, reconciliation confirmations and dynamic reversals are
+        # restricted by the backend, not simply hidden in the UI.
+        for path in (
+            "/api/tax/rates",
+            "/api/bank/reconciliation",
+            "/api/bank/accounts/coverage",
+            "/api/expenses/reconciliation/coverage",
+            "/api/inventory/adjustments",
+            "/api/platform-income/reconciliation",
+            "/api/purchase-receipts/receipt-001/edit",
+            "/api/sales/lines/line-001/return",
+            "/api/sales/lines/line-001/refund",
+            "/api/expenses/allocations/alloc-001/reverse",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(finance_identity.can_write(self.clerk,path))
+                self.assertTrue(finance_identity.can_write(self.approver,path))
+        self.assertTrue(finance_identity.can_write(self.clerk,"/api/tax/rates/draft"))
+        self.assertTrue(finance_identity.can_write(self.clerk,"/api/invoices/red"))
 
     def test_scrypt_named_login_revoked_on_deactivation(self):
         with server.db() as conn:
@@ -172,6 +191,14 @@ class NamedFinanceApprovalTests(unittest.TestCase):
             self.assertEqual(status,403,body)
             status,body,_=request("POST","/api/personal-advances/approve",{},cookie=cookie)
             self.assertEqual(status,403,body)
+            for restricted in (
+                "/api/tax/rates",
+                "/api/bank/accounts/coverage",
+                "/api/expenses/allocations/abc/reverse",
+                "/api/sales/lines/abc/refund",
+            ):
+                status,body,_=request("POST",restricted,{},cookie=cookie)
+                self.assertEqual(status,403,(restricted,body))
             status,body,_=request("POST","/api/invoices",{},cookie=cookie)
             self.assertEqual(status,422,body)
             status,body,_=request("POST","/api/invoices",{},cookie=cookie,
