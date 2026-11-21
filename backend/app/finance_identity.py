@@ -27,7 +27,20 @@ SENSITIVE = {
     "/api/opening-balances",
     "/api/bank/fx-review",
     "/api/open-items/fx-review",
+    # These are finance attestations or accounting changes, not source entry.
+    "/api/tax/rates",
+    "/api/bank/reconciliation",
+    "/api/bank/accounts/coverage",
+    "/api/expenses/reconciliation/coverage",
+    "/api/inventory/adjustments",
+    "/api/platform-income/reconciliation",
 }
+# Dynamic paths cannot be safely governed by an exact-path set.
+SENSITIVE_DYNAMIC = (
+    re.compile(r"^/api/purchase-receipts/[^/]+/edit$"),
+    re.compile(r"^/api/sales/lines/[^/]+/(?:return|refund)$"),
+    re.compile(r"^/api/expenses/allocations/[^/]+/reverse$"),
+)
 MAX_FAILURES = 5
 FAILURE_WINDOW = 600
 SESSION_SECONDS = 8 * 3600
@@ -176,7 +189,9 @@ def logout(headers):
 def can_write(user,path: str) -> bool:
     if not user or user["role"]=="viewer":
         return False
-    if user["role"]=="finance_clerk" and path in SENSITIVE:
+    if user["role"]=="finance_clerk" and (
+        path in SENSITIVE or any(rule.fullmatch(path) for rule in SENSITIVE_DYNAMIC)
+    ):
         return False
     return user["role"] in ROLES
 
