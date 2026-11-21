@@ -67,6 +67,8 @@ def report(conn, period:str)->dict:
 
     invoice_data=defaultdict(lambda:{"input_count":0,"output_count":0,
                                      "input_total":Decimal(0),"output_total":Decimal(0),
+                                     "input_red_total":Decimal(0),"output_red_total":Decimal(0),
+                                     "input_red_count":0,"output_red_count":0,
                                      "pending_tax":0})
     invoices=conn.execute(
         "SELECT direction,currency,total_amount,tax_status FROM invoices "
@@ -83,10 +85,30 @@ def report(conn, period:str)->dict:
         else:
             raise ValueError("invalid invoice direction")
         if row["tax_status"]=="pending":item["pending_tax"]+=1
+    red_rows=conn.execute(
+        "SELECT direction,currency,total_amount FROM invoice_credit_notes "
+        "WHERE substr(issued_on,1,7)=?",(period,)
+    ).fetchall()
+    for row in red_rows:
+        item=invoice_data[row["currency"]]
+        if row["direction"]=="purchase":
+            item["input_red_count"]+=1
+            item["input_red_total"]+=Decimal(row["total_amount"])
+        elif row["direction"]=="sales":
+            item["output_red_count"]+=1
+            item["output_red_total"]+=Decimal(row["total_amount"])
+        else:
+            raise ValueError("invalid red invoice direction")
     invoice_result=[{"currency":currency,
                      "input_count":data["input_count"],"output_count":data["output_count"],
                      "input_total":_format(data["input_total"]),
                      "output_total":_format(data["output_total"]),
+                     "input_red_total":_format(data["input_red_total"]),
+                     "output_red_total":_format(data["output_red_total"]),
+                     "input_red_count":data["input_red_count"],
+                     "output_red_count":data["output_red_count"],
+                     "input_net_movement":_format(data["input_total"]-data["input_red_total"]),
+                     "output_net_movement":_format(data["output_total"]-data["output_red_total"]),
                      "pending_tax":data["pending_tax"]}
                     for currency,data in sorted(invoice_data.items())]
     count=conn.execute(
@@ -97,6 +119,6 @@ def report(conn, period:str)->dict:
     ).fetchone() is not None
     return {"period":period,"closed":closed,
             "bank":{"transaction_count":len(rows),"currencies":bank_result},
-            "invoices":{"document_count":len(invoices),"currencies":invoice_result},
+            "invoices":{"document_count":len(invoices),"red_document_count":len(red_rows),"currencies":invoice_result},
             "original_uploads":int(count),
-            "scope":"银行收支和发票分别统计；流水不能直接代表收入或利润；不同币种不合并。"}
+            "scope":"本月蓝票与本月红票分别统计并列示票据净变动；红票不自动代表销售退款/收入调整或税局进项转出；各币种不合并。"}
