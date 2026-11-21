@@ -105,6 +105,7 @@ def compare(alsvid:dict,workos:dict,*,as_of:date|None=None)->dict:
         if ref:
             by_reference[ref].append(row)
     matched_bank_count=0
+    matched_workos_bank_ids=set()
     needs_payment_review=0
     future_count=0
     for payment in payments:
@@ -117,7 +118,14 @@ def compare(alsvid:dict,workos:dict,*,as_of:date|None=None)->dict:
             issue("invalid_alsvid_payment",sid,"付款方向或金额不正确。","blocking")
             needs_payment_review+=1
             continue
-        if value_date>day.isoformat():
+        try:
+            payment_day=date.fromisoformat(value_date)
+        except (ValueError,TypeError) as exc:
+            issue("invalid_payment_date",sid,
+                  "ALSVID 付款日期无效，不能作为银行流水依据。","blocking")
+            needs_payment_review+=1
+            continue
+        if payment_day>day:
             future_count+=1
             issue("future_dated_alsvid_payment",sid,
                   "日期在核对日之后：不是可确认的已发生银行流水，禁止认作已支付。",
@@ -132,7 +140,15 @@ def compare(alsvid:dict,workos:dict,*,as_of:date|None=None)->dict:
                _decimal(candidate.get("amount"))==value and
                str(candidate.get("transaction_on"))==value_date]
         if len(exact)==1 and len(candidates)==1:
-            matched_bank_count+=1
+            bank_id=str(exact[0]["id"])
+            if bank_id in matched_workos_bank_ids:
+                needs_payment_review+=1
+                issue("payment_duplicate_bank_mapping",sid,
+                      "多个 ALSVID 付款对应同一 Work OS 银行流水，禁止重复认领。",
+                      "blocking")
+            else:
+                matched_workos_bank_ids.add(bank_id)
+                matched_bank_count+=1
             # Even an exact match still requires manual provenance review;
             # this program does not post or allocate bank entries.
         else:
@@ -190,5 +206,5 @@ def compare(alsvid:dict,workos:dict,*,as_of:date|None=None)->dict:
         "issues_total":len(issues),
         "issues_truncated":len(issues)>MAX_DETAILS,
         "safe_to_auto_post":False,
-        "note":"此检查不修改任一库。ALSVlD 历史付款可能是人工登记或未来日期，不能直接当银行流水；应收应付必须先审核原业务，再建立唯一来源映射。"
+        "note":"此检查不修改任一库。ALSVID 历史付款可能是人工登记或未来日期，不能直接当银行流水；应收应付必须先审核原业务，再建立唯一来源映射。"
     }
