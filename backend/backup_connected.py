@@ -195,7 +195,23 @@ def verify_saved_backup(folder:Path)->dict:
             **nas,"recovery_restore_tested":False}
 
 
+def load_private_env():
+    """Load local, untracked .env only when running as a command."""
+    if os.environ.get("WORKOS_LOAD_ENV_FILE","1").lower() in ("0","false","no"):
+        return
+    env_file=Path(__file__).resolve().parents[1]/".env"
+    if not env_file.is_file():return
+    for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+        line=line.strip()
+        if not line or line.startswith("#") or "=" not in line:continue
+        name,value=line.split("=",1)
+        name=name.strip()
+        if name and re.fullmatch("[A-Za-z_][A-Za-z_0-9]*",name):
+            os.environ.setdefault(name,value.strip().strip("\"'"))
+
+
 def main():
+    load_private_env()
     parser=argparse.ArgumentParser(description="Work OS connected Neon + NAS backup")
     parser.add_argument("--verify",metavar="BACKUP_FOLDER")
     args=parser.parse_args()
