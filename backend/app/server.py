@@ -20,6 +20,7 @@ import r2_evidence
 import evidence_audit
 import monthly_flow
 import bank_matching
+import finance_reconcile
 import invoice_bulk
 import local_auth
 import xlsx_reader
@@ -1095,7 +1096,7 @@ def period_close_readiness(conn: sqlite3.Connection, period: str) -> dict:
         statement=conn.execute("SELECT * FROM bank_statement_reconciliations WHERE bank_account_id=? AND period=?",(account["id"],period)).fetchone()
         if not statement:
             unreconciled_bank_accounts+=1;continue
-        account_rows=conn.execute("SELECT direction,amount FROM bank_transactions WHERE account_name=? AND transaction_on LIKE ?",(account["account_name"],f"{period}-%")).fetchall()
+        account_rows=conn.execute("SELECT direction,amount FROM bank_transactions WHERE account_name=? AND currency=? AND transaction_on LIKE ?",(account["account_name"],account["currency"],f"{period}-%")).fetchall()
         inflow=sum((Decimal(row["amount"]) for row in account_rows if row["direction"]=="in"),Decimal(0))
         outflow=sum((Decimal(row["amount"]) for row in account_rows if row["direction"]=="out"),Decimal(0))
         if (Decimal(statement["opening_balance"])+inflow-outflow-Decimal(statement["closing_balance"])).quantize(CENT)!=0:
@@ -1191,6 +1192,12 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(200,evidence_audit.audit_evidence(conn))
             if path == "/api/bank/match-suggestions":
                 return self.reply(200,bank_matching.from_database(conn))
+            if path == "/api/bank/reconciliation-summary":
+                period=parse_qs(parsed.query).get("period",[date.today().strftime("%Y-%m")])[0]
+                try:
+                    return self.reply(200,finance_reconcile.monthly(conn,period))
+                except (ValueError,TypeError) as exc:
+                    return self.reply(422,{"error":str(exc)})
             if path == "/api/archive/files":
                 rows=conn.execute(
                     "SELECT f.id,f.sha256,f.size_bytes,f.created_at,u.original_name,u.category,u.period "
