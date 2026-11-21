@@ -9,22 +9,60 @@ import {
 import './styles.css'
 
 type Module = 'overview' | 'coffee' | 'bike' | 'exhibition' | 'finance'
-type Tab = 'overview' | 'activity' | 'actions'
+type BaseTab = 'overview' | 'activity' | 'actions'
+type CoffeePage = 'purchases' | 'stock' | 'sales' | 'rules' | 'sales-returns' | 'analysis'
+type FinancePage = 'bank' | 'items' | 'invoices' | 'archive' | 'expenses' | 'journals' | 'reports' | 'platform'
+type Tab = BaseTab | CoffeePage | FinancePage
 type OpenTab = { key: string; module: Module; tab: Tab; label: string }
-const tabIndexOf = (t: Tab) => t === 'overview' ? 0 : t === 'activity' ? 1 : 2
-const tabValueOf = (i: number): Tab => i === 0 ? 'overview' : i === 1 ? 'activity' : 'actions'
+type MenuItem = { id: Tab; label: string; icon: string }
 const moduleIconEmoji: Record<Module, string> = { overview: '📊', coffee: '☕', bike: '🚲', exhibition: '🎪', finance: '💳' }
-const tabIconEmoji: Record<Module, string[]> = {
-  overview: ['📊', '📈', '✅'], coffee: ['🛒', '📦', '📈'], bike: ['🧾', '💰', '📊'],
-  exhibition: ['📋', '💵', '📦'], finance: ['💳', '🧾', '📑'],
+const moduleSections: Record<Module, MenuItem[]> = {
+  overview: [
+    {id:'overview',label:'经营总览',icon:'📊'},
+    {id:'activity',label:'业务动态',icon:'📈'},
+    {id:'actions',label:'待我处理',icon:'✅'},
+  ],
+  coffee: [
+    {id:'purchases',label:'采购管理',icon:'🛒'},
+    {id:'stock',label:'库存管理',icon:'📦'},
+    {id:'sales',label:'销售导入',icon:'📥'},
+    {id:'sales-returns',label:'销售退货',icon:'↩'},
+    {id:'rules',label:'包装规则',icon:'🏷'},
+    {id:'analysis',label:'经营分析',icon:'📈'},
+  ],
+  bike: [
+    {id:'overview',label:'采购与付款',icon:'🧾'},
+    {id:'activity',label:'到岸成本',icon:'🚢'},
+    {id:'actions',label:'销售与利润',icon:'📊'},
+  ],
+  exhibition: [
+    {id:'overview',label:'项目概览',icon:'📋'},
+    {id:'activity',label:'预算与费用',icon:'💵'},
+    {id:'actions',label:'样品调度',icon:'📦'},
+  ],
+  finance: [
+    {id:'bank',label:'银行流水',icon:'💳'},
+    {id:'items',label:'应收应付',icon:'💰'},
+    {id:'invoices',label:'发票管理',icon:'🧾'},
+    {id:'archive',label:'原始凭证',icon:'📁'},
+    {id:'expenses',label:'经营费用',icon:'📉'},
+    {id:'journals',label:'会计分录',icon:'📒'},
+    {id:'reports',label:'经营报表',icon:'📊'},
+    {id:'platform',label:'平台收入核对',icon:'🔍'},
+  ],
 }
+const defaultSection: Record<Module,Tab> = {
+  overview:'overview',coffee:'purchases',bike:'overview',exhibition:'overview',finance:'bank'
+}
+const sectionLabel = (module:Module, tab:Tab) =>
+  moduleSections[module].find(item=>item.id===tab)?.label ?? moduleSections[module][0].label
 
 const modules: { id: Module; label: string; icon: React.ElementType }[] = [
   { id: 'overview', label: '经营总览', icon: LayoutDashboard },
   { id: 'coffee', label: '咖啡业务', icon: Coffee },
   { id: 'bike', label: '自行车业务', icon: Bike },
   { id: 'exhibition', label: '展会项目', icon: BriefcaseBusiness },
-  { id: 'finance', label: '财务核算中心', icon: WalletCards },
+  { id: 'finance', label: '财务中心', icon: WalletCards },
 ]
 
 const moduleCopy: Record<Module, { eyebrow: string; title: string; desc: string; tabs: string[] }> = {
@@ -76,10 +114,10 @@ function App() {
   const [active, setActive] = useState<Module>('overview')
   const [tab, setTab] = useState<Tab>('overview')
   const [sideOpen, setSideOpen] = useState(true)
-  const [openTabs, setOpenTabs] = useState<OpenTab[]>([{ key: 'overview|overview', module: 'overview', tab: 'overview', label: moduleCopy.overview.tabs[0] }])
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([{ key: 'overview|overview', module: 'overview', tab: 'overview', label: sectionLabel('overview','overview') }])
   // 打开/激活一个二级页面为标签（同一页面不重复开）
   function openPage(module: Module, t: Tab) {
-    const label = moduleCopy[module].tabs[tabIndexOf(t)]
+    const label = sectionLabel(module,t)
     const key = `${module}|${t}`
     setActive(module); setTab(t)
     setOpenTabs(prev => prev.some(x => x.key === key) ? prev : [...prev, { key, module, tab: t, label }])
@@ -87,15 +125,19 @@ function App() {
   function activateTab(item: OpenTab) { setActive(item.module); setTab(item.tab) }
   function closeTab(key: string, e: React.MouseEvent) {
     e.stopPropagation()
-    setOpenTabs(prev => {
-      const next = prev.filter(x => x.key !== key)
-      if (key === `${active}|${tab}` && next.length) { const fb = next[next.length - 1]; setActive(fb.module); setTab(fb.tab) }
-      return next
-    })
+    const remaining = openTabs.filter(item => item.key !== key)
+    const next: OpenTab[] = remaining.length ? remaining : [
+      {key:'overview|overview',module:'overview',tab:'overview',label:sectionLabel('overview','overview')},
+    ]
+    setOpenTabs(next)
+    if (key === `${active}|${tab}`) {
+      const fallback = next[next.length - 1]
+      setActive(fallback.module)
+      setTab(fallback.tab)
+    }
   }
   function closeAllTabs() {
-    const cur = { key: `${active}|${tab}`, module: active, tab, label: moduleCopy[active].tabs[tabIndexOf(tab)] }
-    setOpenTabs([cur])
+    setOpenTabs([{key:`${active}|${tab}`,module:active,tab,label:sectionLabel(active,tab)}])
   }
   const [drawer, setDrawer] = useState(false)
   const [quickCreate, setQuickCreate] = useState<{kind:'purchase'|'sales';requestId:string}|null>(null)
@@ -136,7 +178,7 @@ function App() {
   // 任何入口改变了当前模块/子页（含业务代码里的 setTab / navigate），都自动补进标签栏
   useEffect(() => {
     const key = `${active}|${tab}`
-    setOpenTabs(prev => prev.some(x => x.key === key) ? prev : [...prev, { key, module: active, tab, label: moduleCopy[active].tabs[tabIndexOf(tab)] }])
+    setOpenTabs(prev => prev.some(x => x.key === key) ? prev : [...prev, { key, module: active, tab, label: sectionLabel(active,tab) }])
   }, [active, tab])
   const isCurrentPeriodClosed = periodLocks.some(row=>row.period===currentPeriod)
   async function openPeriodCloseReview(){if(isCurrentPeriodClosed)return;setCloseReadiness(null);setCloseError('');setCloseChecks({});setCloseBusy(true);try{const response=await fetch(`/api/periods/close-readiness?period=${currentPeriod}`);const data=await response.json();if(!response.ok)throw new Error(data.error||'无法读取关账检查');setCloseReadiness(data)}catch(error){setCloseError(error instanceof Error?error.message:'关账检查失败')}finally{setCloseBusy(false)}}
@@ -166,14 +208,14 @@ function App() {
   },[purchases,expenses,bankRows,inventoryMovements])
   const visibleItems = useMemo(() => activityItems.filter(item => `${item.title} ${item.detail} ${item.state} ${item.amount}`.toLowerCase().includes(query.toLowerCase())), [activityItems,query])
 
-  function navigate(id: Module) { openPage(id, 'overview') }
+  function navigate(id: Module) { openPage(id, defaultSection[id]) }
 
   return <div className="fx-shell">
     <header className="fx-topbar">
       <button className="fx-brand" onClick={() => openPage('overview','overview')} aria-label="回到经营总览"><span className="fx-logo">🤝</span><span className="fx-brandname">workOS · 经营工作台</span></button>
       <div className="fx-brandpick" title="当前本地账套"><span className="fx-bp-logo">🏷</span><span className="fx-bp-name">本地工作账套</span><span className="fx-bp-arrow">▾</span></div>
       <nav className="fx-primary" aria-label="一级导航">
-        {modules.map(item => <button key={item.id} className={`fx-pitem ${active === item.id ? 'active' : ''}`} onClick={() => openPage(item.id, 'overview')}><span className="fx-ic">{moduleIconEmoji[item.id]}</span><span>{item.label}</span></button>)}
+        {modules.map(item => <button key={item.id} className={`fx-pitem ${active === item.id ? 'active' : ''}`} onClick={() => navigate(item.id)}><span className="fx-ic">{moduleIconEmoji[item.id]}</span><span>{item.label}</span></button>)}
       </nav>
       <div className="fx-topright">
         <span className="fx-ver">v<b>0.1</b></span>
@@ -188,7 +230,7 @@ function App() {
         <div className="fx-sideInner">
           <div className="fx-sideTitle">{copy.title} / 菜单</div>
           <nav className="fx-secondary">
-            {copy.tabs.map((label, i) => <button key={label} className={`fx-sitem ${i === tabIndexOf(tab) ? 'active' : ''}`} onClick={() => openPage(active, tabValueOf(i))}><span className="fx-ic">{tabIconEmoji[active]?.[i] || '•'}</span><span className="fx-txt">{label}</span></button>)}
+            {moduleSections[active].map(item => <button key={item.id} type="button" aria-current={tab===item.id?'page':undefined} className={`fx-sitem ${tab === item.id ? 'active' : ''}`} onClick={() => openPage(active,item.id)}><span className="fx-ic">{item.icon}</span><span className="fx-txt">{item.label}</span></button>)}
           </nav>
         </div>
       </aside>
@@ -207,10 +249,10 @@ function App() {
         <div className="fx-frames">
           <div className="fx-frame active">
             <div className="main-content">
-      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{active === 'overview' ? '经营总览' : modules.find(item => item.id === active)?.label}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> 本地工作账套</span></div>
+      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{modules.find(item => item.id === active)?.label}</span><span className="crumb-slash">/</span><span>{sectionLabel(active,tab)}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> 本地工作账套</span></div>
       <section className="welcome-row"><div><div className="eyebrow"><span className="eyebrow-line"/>{copy.eyebrow}</div><h1>{copy.title}</h1><p className="welcome-desc">{copy.desc}</p></div><button className="primary-button" onClick={() => setDrawer(true)}><Plus size={17}/> 新建业务单据</button></section>
 
-      <div className="subnav-row"><div className="subnav">{copy.tabs.map((label, i) => <button key={label} className={i === (tab === 'overview' ? 0 : tab === 'activity' ? 1 : 2) ? 'active' : ''} onClick={() => setTab(i === 0 ? 'overview' : i === 1 ? 'activity' : 'actions')}>{label}{label === '待我处理' && apiOnline && <span className="tab-count">{todoCount}</span>}</button>)}</div><div className="date-filter"><CalendarDays size={15}/> 本月 <ChevronDown size={13}/></div></div>
+
 
       {active === 'coffee' ? <CoffeeWorkspace inventory={inventory} safetyStocks={safetyStocks} movements={inventoryMovements} purchases={purchases} packagingRules={packagingRules} apiOnline={apiOnline} refresh={refreshData} quickCreate={quickCreate}/> : active === 'bike' ? <BikeWorkspace orders={bikeOrders} costs={bikeCosts} sales={bikeSales} tab={tab} refresh={refreshData}/> : active === 'finance' ? <FinanceWorkspace projects={projects} openItems={openItems} expenses={expenses} bankRows={bankRows} invoices={invoices} journalEntries={journalEntries} operatingReport={operatingReport} currentPeriod={currentPeriod} refresh={refreshData} focus={financeFocus}/> : active==='exhibition'?<ExhibitionWorkspace projects={projects} expenses={expenses} inventory={inventory} packagingRules={packagingRules} sampleDispatches={sampleDispatches} tab={tab} refresh={refreshData}/>: active === 'overview' ? <>
         <section className="metric-grid" aria-label="经营关键指标">
