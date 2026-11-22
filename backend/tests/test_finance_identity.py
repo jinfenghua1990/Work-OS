@@ -216,6 +216,103 @@ class NamedFinanceApprovalTests(unittest.TestCase):
             httpd.server_close()
             thread.join(2)
 
+    def close_request(self,key="test-close-001",period="2026-12"):
+        return {
+            "source_key":key,
+            "period":period,
+            "reviewed_checks":[item["key"] for item in server.PERIOD_REVIEW_CHECKS],
+            "closed_by":"spoofed-client-reviewer",
+        }
+
+    def test_named_period_close_requires_independent_reviewer(self):
+        complete={"can_close":True,"blockers":[],"journal_count":3}
+        self.api._principal=self.clerk
+        with patch.object(server,"period_close_readiness",return_value=complete):
+            status,request=self.api.submit_period_close(self.close_request())
+            self.assertEqual(status,201,request)
+            self.assertEqual(request["status"],"pending")
+            status,again=self.api.submit_period_close(self.close_request())
+            self.assertEqual(status,200,again)
+            self.assertTrue(again["duplicate"])
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM period_locks WHERE period='2026-12'"
+            ).fetchone()[0],0)
+        with self.assertRaisesRegex(PermissionError,"approver"):
+            self.api.approve_period_close({"request_id":request["id"]})
+        self.api._principal=self.approver
+        with patch.object(server,"period_close_readiness",return_value=complete):
+            status,approved=self.api.approve_period_close({"request_id":request["id"]})
+            self.assertEqual(status,201,approved)
+            self.assertTrue(approved["independent_approval"])
+            self.assertEqual(approved["closed_by"],"approver01")
+            status,again=self.api.approve_period_close({"request_id":request["id"]})
+            self.assertEqual(status,200,again)
+            self.assertTrue(again["duplicate"])
+        with server.db() as conn:
+            lock=conn.execute(
+                "SELECT * FROM period_locks WHERE period='2026-12'"
+            ).fetchone()
+            audit=conn.execute(
+                "SELECT * FROM finance_period_close_requests WHERE id=?",
+                (request["id"],)
+            ).fetchone()
+            self.assertEqual(lock["closed_by"],"approver01")
+            self.assertEqual(lock["journal_count"],3)
+            self.assertEqual(audit["requested_by_user_id"],self.clerk["id"])
+            self.assertEqual(audit["approved_by_user_id"],self.approver["id"])
+            self.assertEqual(audit["status"],"approved")
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM period_locks WHERE period='2026-12'"
+            ).fetchone()[0],1)
+
+    def test_named_close_rejects_self_approval_and_new_blockers(self):
+        complete={"can_close":True,"blockers":[],"journal_count":0}
+        blocked={"can_close":False,
+                 "blockers":[{"key":"bank","label":"银行未核平","count":1}]}
+        self.api._principal=self.owner
+        with patch.object(server,"period_close_readiness",return_value=complete):
+            _,request=self.api.submit_period_close(
+                self.close_request("close-owner-1","2027-01"))
+        with self.assertRaisesRegex(ValueError,"two different"):
+            self.api.approve_period_close({"request_id":request["id"]})
+        self.api._principal=self.approver
+        with patch.object(server,"period_close_readiness",return_value=blocked):
+            with self.assertRaisesRegex(ValueError,"银行未核平"):
+                self.api.approve_period_close({"request_id":request["id"]})
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM period_locks WHERE period='2027-01'"
+            ).fetchone()[0],0)
+            self.assertEqual(conn.execute(
+                "SELECT status FROM finance_period_close_requests "
+                "WHERE id=?",(request["id"],)
+            ).fetchone()[0],"pending")
+        self.api._principal=self.owner
+        with patch.object(server,"period_close_readiness",return_value=blocked):
+            with self.assertRaisesRegex(ValueError,"银行未核平"):
+                self.api.submit_period_close(self.close_request("blocked-2","2027-02"))
+
+    def test_close_request_cancel_preserves_history_and_allows_resubmit(self):
+        complete={"can_close":True,"blockers":[],"journal_count":0}
+        self.api._principal=self.clerk
+        with patch.object(server,"period_close_readiness",return_value=complete):
+            _,request=self.api.submit_period_close(
+                self.close_request("original","2027-03"))
+        status,cancelled=self.api.cancel_period_close({"request_id":request["id"]})
+        self.assertEqual(status,201,cancelled)
+        self.assertEqual(cancelled["status"],"cancelled")
+        with patch.object(server,"period_close_readiness",return_value=complete):
+            status,second=self.api.submit_period_close(
+                self.close_request("new-request","2027-03"))
+        self.assertEqual(status,201,second)
+        self.assertNotEqual(request["id"],second["id"])
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM finance_period_close_requests "
+                "WHERE period='2027-03'"
+            ).fetchone()[0],2)
+
     def test_legacy_unattributed_draft_is_fail_closed(self):
         with server.db() as conn:
             record=personal_advances.draft(conn,self.claim("unattributed"),server.now)
