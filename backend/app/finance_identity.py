@@ -98,6 +98,7 @@ def ensure_tables(conn) -> None:
         source_key TEXT NOT NULL UNIQUE,
         action_type TEXT NOT NULL CHECK(action_type IN ('bank_allocation','manual_journal','invoice_tax_status')),
         payload TEXT NOT NULL,
+        action_fingerprint TEXT NOT NULL,
         expected_before TEXT,
         submitted_by_user_id TEXT NOT NULL REFERENCES finance_users(id),
         submitted_at TEXT NOT NULL,
@@ -111,6 +112,9 @@ def ensure_tables(conn) -> None:
     )""")
     conn.execute("""CREATE INDEX IF NOT EXISTS ix_finance_action_reviews_status
         ON finance_action_reviews(status,submitted_at)""")
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ix_finance_review_active_fingerprint
+        ON finance_action_reviews(action_fingerprint)
+        WHERE status IN ('pending','approved')""")
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
