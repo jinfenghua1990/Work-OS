@@ -170,6 +170,12 @@ class FinanceActionReviewTests(unittest.TestCase):
                                  "amount":"10.00"}],
                  "action_key":"fake-submitter-key"}
         _,request=self.submit("bank_allocation",payload,"bank-review")
+        status,dupe=self.submit("bank_allocation",{
+            **payload,"action_key":"different-spoofed-retry-key"
+        },"bank-review-same-business-different-key")
+        self.assertEqual(status,200,dupe)
+        self.assertEqual(dupe["id"],request["id"])
+        self.assertTrue(dupe["duplicate"])
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM bank_allocations").fetchone()[0],0)
         self.api._principal=self.approver
@@ -177,6 +183,11 @@ class FinanceActionReviewTests(unittest.TestCase):
         self.assertEqual(status,201,result)
         status,again=self.api.approve_finance_review({"request_id":request["id"]})
         self.assertEqual(status,200,again)
+        self.api._principal=self.clerk
+        status,repeat=self.submit("bank_allocation",payload,"new-id-after-approval")
+        self.assertEqual(status,200,repeat)
+        self.assertEqual(repeat["id"],request["id"])
+        self.assertTrue(repeat["duplicate"])
         with server.db() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM bank_allocations").fetchone()[0],1)
             self.assertEqual(conn.execute("SELECT settled_amount FROM receivables_payables "
