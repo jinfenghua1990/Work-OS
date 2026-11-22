@@ -66,7 +66,9 @@ class FinanceActionReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError,"approver"):
             self.api.approve_finance_review({"request_id":request["id"]})
         self.api._principal=self.owner
-        status,other=self.submit("manual_journal",self.journal(),"owner-review")
+        owner_journal=self.journal()
+        owner_journal["description"]="第二笔独立测试分录"
+        status,other=self.submit("manual_journal",owner_journal,"owner-review")
         self.assertEqual(status,201,other)
         with self.assertRaisesRegex(ValueError,"different"):
             self.api.approve_finance_review({"request_id":other["id"]})
