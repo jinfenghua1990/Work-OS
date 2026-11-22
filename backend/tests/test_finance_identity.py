@@ -211,6 +211,24 @@ class NamedFinanceApprovalTests(unittest.TestCase):
             read_only_cookie=viewer[2].split(";",1)[0]
             status,body,_=request("POST","/api/expenses",{},cookie=read_only_cookie)
             self.assertEqual(status,403,body)
+            # A named approver must not bypass the request queue by POSTing
+            # directly to the old financial write endpoints.
+            reviewer=request("POST","/api/auth/login",{
+                "username":"approver01","password":"b"*18
+            })
+            self.assertEqual(reviewer[0],200)
+            reviewer_cookie=reviewer[2].split(";",1)[0]
+            for direct in (
+                "/api/bank/allocate",
+                "/api/journals/adjustments",
+                "/api/invoices/tax-status",
+            ):
+                status,body,_=request("POST",direct,{},cookie=reviewer_cookie)
+                self.assertEqual(status,409,(direct,body))
+                self.assertEqual(body["code"],"WORKOS_FINANCE_APPROVAL_REQUIRED")
+            status,body,_=request("POST","/api/finance/reviews/approve",{},
+                                   cookie=cookie)
+            self.assertEqual(status,403,body)
         finally:
             httpd.shutdown()
             httpd.server_close()
