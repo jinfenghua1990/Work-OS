@@ -4,7 +4,7 @@ import {
   Activity, ArrowDownLeft, ArrowRight, ArrowUpRight, Bell, Bike, BriefcaseBusiness,
   CalendarDays, Check, ChevronDown, CircleHelp, Coffee, Command, FileCheck2,
   FileSpreadsheet, LayoutDashboard, MoreHorizontal, Plus, Search, Settings2,
-  ShieldCheck, Sparkles, WalletCards, X
+  Sparkles, WalletCards, X
 } from './icons'
 import {BankMatchSuggestions,InvoiceBatchImport} from './finance_import'
 import {InvoiceRedTaxControls} from './invoice_red_panel'
@@ -75,12 +75,12 @@ const modules: { id: Module; label: string; icon: React.ElementType }[] = [
   { id: 'finance', label: '财务中心', icon: WalletCards },
 ]
 
-const moduleCopy: Record<Module, { eyebrow: string; title: string; desc: string }> = {
-  overview: { eyebrow: 'WORKSPACE / 经营驾驶舱', title: '经营总览', desc: '汇总已录入的业务与财务事实。未接入来源的数据会明确标记，不以演示数代替实际。' },
-  coffee: { eyebrow: 'COFFEE / 咖啡业务', title: '咖啡业务', desc: '采购、收货、库存、销售及周转在这里协同。' },
-  bike: { eyebrow: 'ALSVID / 统一财务视图', title: 'ALSVID 财务汇总', desc: '仅查看财务汇总、核销与异常；采购、生产、入库和销售业务在 ALSVID Admin 操作。' },
-  exhibition: { eyebrow: 'EVENTS / 展会项目', title: '展会项目', desc: '把预算执行与真实经营损益放在同一个项目视图中核对。' },
-  finance: { eyebrow: 'FINANCE / 财务核算中心', title: '财务中心', desc: '流水、票据和业务单据各自记录，再通过可追溯认领形成完整账务。' },
+const moduleCopy: Record<Module, { title: string }> = {
+  overview: { title: '经营总览' },
+  coffee: { title: '咖啡业务' },
+  bike: { title: 'ALSVID 财务汇总' },
+  exhibition: { title: '展会项目' },
+  finance: { title: '财务中心' },
 }
 
 type InventoryRow = { sku: string; currency: string; quantity: number; value: string }
@@ -264,8 +264,7 @@ function App() {
             const isCurrentPage = page.key === activePageKey
             return <div key={page.key} className={`fx-frame ${isCurrentPage ? 'active' : ''}`} style={{display:isCurrentPage?'block':'none'}} aria-hidden={!isCurrentPage}>
             <div className="main-content">
-      <div className="breadcrumb"><span>工作空间</span><span className="crumb-slash">/</span><span>{modules.find(item => item.id === active)?.label}</span><span className="crumb-slash">/</span><span>{sectionLabel(active,tab)}</span><span className="breadcrumb-right"><ShieldCheck size={13}/> {dbBackend==='postgres'?'PostgreSQL':dbBackend==='sqlite'?'SQLite 离线':'未连接'}</span></div>
-      <section className="welcome-row"><div><div className="eyebrow"><span className="eyebrow-line"/>{copy.eyebrow}</div><h1>{sectionLabel(active,tab)}</h1><p className="welcome-desc">{copy.desc}</p></div><button className="primary-button" onClick={() => setDrawer(true)}><Plus size={17}/> 新建业务单据</button></section>
+      <section className="welcome-row"><h1>{sectionLabel(active,tab)}</h1><button className="primary-button" onClick={() => setDrawer(true)}><Plus size={17}/> 新建业务单据</button></section>
 
 
 
@@ -295,7 +294,7 @@ function App() {
 
     {(closeReadiness||closeBusy||closeError)&&<div className="modal-backdrop"><section className="period-close-modal" role="dialog" aria-modal="true" aria-labelledby="period-close-title"><div className="panel-heading"><div><h2 id="period-close-title">{currentPeriod} 关账检查</h2><p>系统检查可验证的账务异常；其余核对项由关账人确认并留存。具名账号模式下，必须由另一名审批员确认后才会锁账；单人模式沿用原有操作。</p></div><button className="icon-button" onClick={()=>{setCloseReadiness(null);setCloseError('')}} aria-label="关闭"><X size={18}/></button></div>{closeBusy&&!closeReadiness?<div className="empty-inline">正在检查本期账务…</div>:closeError?<div className="form-error">{closeError}</div>:closeReadiness&&<><div className="close-readiness-summary"><span>本期凭证 {closeReadiness.journal_count} 张</span><span>银行流水 {closeReadiness.bank_rows} 笔</span><span>登记账户 {closeReadiness.registered_bank_accounts} 个 · 未核平 {closeReadiness.unreconciled_bank_accounts} 个</span><span>账户清单 {closeReadiness.bank_account_list_unconfirmed?'待确认':'已确认'}</span><span>未分类流水分配 {closeReadiness.unclassified_bank_allocations} 笔</span><span>待复核税务状态发票 {closeReadiness.pending_tax_invoices} 张</span></div><CloseReviewEvidence readiness={closeReadiness} onOpen={openCloseReviewItem}/><div className="close-review-list">{closeReadiness.checks_required.map(item=><label key={item.key}><input type="checkbox" checked={Boolean(closeChecks[item.key])} onChange={event=>setCloseChecks({...closeChecks,[item.key]:event.target.checked})}/><span><strong>{item.label}</strong><small>{item.detail}</small></span></label>)}</div>{!namedClose&&<label className="close-operator">关账人姓名（手工填写）<input value={closeActor} onChange={event=>{setCloseActor(event.target.value);localStorage.setItem('workos-close-actor',event.target.value)}} placeholder="填写实际复核人" required/></label>}{namedClose&&<p className="report-caveat">本次仅提交审批申请，只有其他具名审批账号完成复核后才会锁账。</p>}<p className="report-caveat">费用完整性及外部数据对账仍依赖人工复核；确认表示你已完成上述检查。未分配流水、银行未核平和缺少汇率的外币余额会阻止关账；已暂挂待分类的流水须核对并在复核清单中确认。</p></>}{closeReadiness&&<div className="close-modal-actions"><button className="secondary-button" onClick={()=>setCloseReadiness(null)}>返回</button><button className="primary-button" disabled={closeBusy||(!namedClose&&!closeActor.trim())||!closeReadiness.can_close||closeReadiness.checks_required.some(item=>!closeChecks[item.key])} onClick={()=>void closeCurrentPeriod()}>{closeBusy?'提交中…':closeReadiness.can_close?(namedClose?'提交独立审批':'确认并关账'):'先处理阻断项'}</button></div>}</section></div>}
 
-    {drawer && <div className="drawer-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDrawer(false) }}><aside className="drawer"><div className="drawer-head"><div><span className="eyebrow">QUICK CREATE</span><h2>新建业务单据</h2><p>选择单据类型，快速录入一条业务事实。</p></div><button className="icon-button" onClick={() => setDrawer(false)} aria-label="关闭"><X size={18}/></button></div><div className="drawer-section-label">常用单据</div><div className="create-options"><CreateOption icon={Coffee} title="咖啡采购单" desc="登记采购数量与凭据金额，再记录到货数量" onClick={() => { setDrawer(false); setQuickCreate({kind:'purchase',requestId:crypto.randomUUID()}); openPage('coffee','purchases') }}/><CreateOption icon={FileSpreadsheet} title="销售数据导入" desc="打开销售导入与列映射页面" onClick={() => { setDrawer(false); setQuickCreate({kind:'sales',requestId:crypto.randomUUID()}); openPage('coffee','sales') }}/><CreateOption icon={WalletCards} title="经营费用" desc="按发生日期登记费用并形成应付" onClick={() => { setDrawer(false); openPage('finance','expenses') }}/><CreateOption icon={BriefcaseBusiness} title="展会项目" desc="选择或新建展会项目后登记预算与费用" onClick={() => { setDrawer(false); openPage('exhibition','overview') }}/></div><div className="drawer-foot"><CircleHelp size={15}/> 单据确认后将保留完整操作记录。</div></aside></div>}
+    {drawer && <div className="drawer-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setDrawer(false) }}><aside className="drawer"><div className="drawer-head"><div><h2>新建业务单据</h2><p>选择单据类型，快速录入一条业务事实。</p></div><button className="icon-button" onClick={() => setDrawer(false)} aria-label="关闭"><X size={18}/></button></div><div className="drawer-section-label">常用单据</div><div className="create-options"><CreateOption icon={Coffee} title="咖啡采购单" desc="登记采购数量与凭据金额，再记录到货数量" onClick={() => { setDrawer(false); setQuickCreate({kind:'purchase',requestId:crypto.randomUUID()}); openPage('coffee','purchases') }}/><CreateOption icon={FileSpreadsheet} title="销售数据导入" desc="打开销售导入与列映射页面" onClick={() => { setDrawer(false); setQuickCreate({kind:'sales',requestId:crypto.randomUUID()}); openPage('coffee','sales') }}/><CreateOption icon={WalletCards} title="经营费用" desc="按发生日期登记费用并形成应付" onClick={() => { setDrawer(false); openPage('finance','expenses') }}/><CreateOption icon={BriefcaseBusiness} title="展会项目" desc="选择或新建展会项目后登记预算与费用" onClick={() => { setDrawer(false); openPage('exhibition','overview') }}/></div><div className="drawer-foot"><CircleHelp size={15}/> 单据确认后将保留完整操作记录。</div></aside></div>}
   </div>
 }
 

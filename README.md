@@ -17,9 +17,11 @@ npm install
 npm run dev:full
 ```
 
-浏览器打开 `http://127.0.0.1:5175`。API 在 `http://127.0.0.1:8106`，前端通过本地代理访问。此启动方式固定使用本地 SQLite，并跳过 `.env` 文件加载，不会连接 Neon。停止两个服务按 `Ctrl+C`。
+浏览器打开 `http://127.0.0.1:8082`。API 在 `http://127.0.0.1:8106`，前端通过本地代理访问。此启动方式固定使用本地 SQLite，并跳过 `.env` 文件加载，不会连接 Neon。停止两个服务按 `Ctrl+C`。
 
 需要 Node.js 和 Python 3.11 或更新版本。业务界面、API 和图标由项目本地源码提供；运行时不加载 CDN、远程字体或图片。npm 包只用于本地构建与 React 界面，虚拟环境中的 psycopg 驱动只用于连接 PostgreSQL。
+
+本机常驻部署（macOS LaunchAgent）：`com.gino.workos-api`（离线 API，8106）和 `com.gino.workos-web`（8082 生产构建预览）。改完前端后运行 `npm run build`，再执行 `launchctl kickstart -k gui/$(id -u)/com.gino.workos-web`；日志在 `~/Library/Logs/WorkOS/`。
 
 ## 数据
 
@@ -42,7 +44,7 @@ npm install
 npm run dev:connected
 ```
 
-浏览器仍打开 `http://127.0.0.1:5175`。顶部清楚显示“PostgreSQL 共享账套”或者“SQLite 离线账套”，不会把离线账套伪装为正式财务数据库。数据库必须预先迁移到当前版本，此启动入口**不会自动修改 Neon**。
+浏览器仍打开 `http://127.0.0.1:8082`。顶部清楚显示“PostgreSQL 共享账套”或者“SQLite 离线账套”，不会把离线账套伪装为正式财务数据库。数据库必须预先迁移到当前版本，此启动入口**不会自动修改 Neon**。
 
 **不要在本机离线账套和共享账套分别记录同一笔正式业务。** `npm run dev:full` 始终是独立的离线 SQLite 体验，数据不会自动同步；正式业务应使用 `dev:connected` 且运行前确认连接的是预期 Neon 分支。
 
