@@ -92,6 +92,33 @@ class FinanceActionReviewTests(unittest.TestCase):
             self.assertEqual(audit["approved_by_user_id"],self.approver["id"])
             self.assertEqual(audit["status"],"approved")
 
+    def test_manual_journal_duplicate_cannot_hide_behind_new_source_key(self):
+        journal=self.journal()
+        status,first=self.submit("manual_journal",journal,"manual-original")
+        self.assertEqual(status,201,first)
+        status,second=self.submit("manual_journal",{
+            **journal,"source_key":"new-client-key"
+        },"manual-second-attempt")
+        self.assertEqual(status,200,second)
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(first["id"],second["id"])
+        self.api._principal=self.approver
+        status,_=self.api.approve_finance_review({"request_id":first["id"]})
+        self.assertEqual(status,201)
+        self.api._principal=self.clerk
+        status,retry=self.submit("manual_journal",{
+            **journal,"source_key":"third-client-key"
+        },"manual-third-attempt")
+        self.assertEqual(status,200,retry)
+        self.assertEqual(first["id"],retry["id"])
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM manual_journal_requests"
+            ).fetchone()[0],1)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM finance_action_reviews WHERE status='approved'"
+            ).fetchone()[0],1)
+
     def test_invalid_adjustment_rolls_back_review_and_journal_together(self):
         bad=self.journal()
         bad["lines"][1]["credit"]="2.00"
