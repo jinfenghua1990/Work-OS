@@ -63,7 +63,7 @@ class CreditNoteTests(unittest.TestCase):
 
     def test_schema_version_44_and_readiness(self):
         with server.db() as conn:
-            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],44)
+            self.assertEqual(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0],server.LATEST_SCHEMA_VERSION)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM invoice_credit_notes").fetchone()[0],0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM tax_rate_rules").fetchone()[0],0)
 
