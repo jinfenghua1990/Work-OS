@@ -22,6 +22,7 @@ SENSITIVE = {
     "/api/personal-advances/approve",
     "/api/periods/close",
     "/api/periods/close/approve",
+    "/api/finance/reviews/approve",
     "/api/journals/adjustments",
     "/api/bank/allocate",
     "/api/invoices/tax-status",
@@ -90,6 +91,26 @@ def ensure_tables(conn) -> None:
     conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ix_finance_pending_period_close
         ON finance_period_close_requests(period) WHERE status='pending'""")
 
+
+
+    conn.execute("""CREATE TABLE IF NOT EXISTS finance_action_reviews (
+        id TEXT PRIMARY KEY,
+        source_key TEXT NOT NULL UNIQUE,
+        action_type TEXT NOT NULL CHECK(action_type IN ('bank_allocation','manual_journal','invoice_tax_status')),
+        payload TEXT NOT NULL,
+        expected_before TEXT,
+        submitted_by_user_id TEXT NOT NULL REFERENCES finance_users(id),
+        submitted_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','approved','cancelled')),
+        approved_by_user_id TEXT REFERENCES finance_users(id),
+        approved_at TEXT,
+        cancelled_by_user_id TEXT REFERENCES finance_users(id),
+        cancelled_at TEXT,
+        result_payload TEXT,
+        CHECK(approved_by_user_id IS NULL OR approved_by_user_id != submitted_by_user_id)
+    )""")
+    conn.execute("""CREATE INDEX IF NOT EXISTS ix_finance_action_reviews_status
+        ON finance_action_reviews(status,submitted_at)""")
 
 
 def _hash_password(password: str, salt: bytes | None = None) -> str:
