@@ -237,6 +237,59 @@ class PostgresLiveTests(unittest.TestCase):
         self.assertEqual(status,200,again)
         self.assertTrue(again["duplicate"])
 
+    def test_named_finance_review_posts_atomically_in_disposable_postgres(self):
+        """Different signed-in actors, one durable journal and approval audit."""
+        import finance_identity
+        marker=uuid4().hex[:10]
+        with server.db() as conn:
+            submitter=finance_identity.create_user(
+                conn,"pgsubmit"+marker,"test-password-submitter-2026","finance_clerk"
+            )
+            approver=finance_identity.create_user(
+                conn,"pgapprove"+marker,"test-password-approver-2026","finance_approver"
+            )
+        api=server.Api.__new__(server.Api)
+        api.reply=lambda status,body:(status,body)
+        api._principal=submitter
+        data={
+            "source_key":"pg-review-"+marker,
+            "action_type":"manual_journal",
+            "payload":{
+                "source_key":"untrusted-"+marker,
+                "posted_on":"2026-11-20","description":"PostgreSQL double entry review",
+                "business_line":"corporate","entity_code":"main",
+                "lines":[
+                    {"account":"bank","debit":"5.00","credit":"0.00"},
+                    {"account":"accounts_payable","debit":"0.00","credit":"5.00"}
+                ],
+            }
+        }
+        status,request=api.submit_finance_review(data)
+        self.assertEqual(status,201,request)
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM journal_entries e "
+                "WHERE e.source_type='manual_adjustment' AND e.memo='PostgreSQL double entry review'"
+            ).fetchone()[0],0)
+        api._principal=approver
+        status,approved=api.approve_finance_review({"request_id":request["id"]})
+        self.assertEqual(status,201,approved)
+        self.assertEqual(approved["status"],"approved")
+        status,repeated=api.approve_finance_review({"request_id":request["id"]})
+        self.assertEqual(status,200,repeated)
+        self.assertTrue(repeated["duplicate"])
+        with server.db() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM journal_entries e "
+                "WHERE e.source_type='manual_adjustment' AND e.memo='PostgreSQL double entry review'"
+            ).fetchone()[0],1)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM finance_action_reviews "
+                "WHERE id=? AND submitted_by_user_id=? AND approved_by_user_id=? "
+                "AND status='approved'",
+                (request["id"],submitter["id"],approver["id"])
+            ).fetchone()[0],1)
+
     def test_v35_migration_against_disposable_pg_database(self):
         # Regression check: the connected Neon dev branch was at schema 35.
         # The DELETE is allowed only in the disposable localhost workos_ci DB.
