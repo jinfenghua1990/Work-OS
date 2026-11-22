@@ -62,6 +62,11 @@ def submit(conn, raw:dict, actor:dict, now):
     fingerprint_data=json.loads(payload)
     if action=="bank_allocation":
         fingerprint_data.pop("action_key",None)
+    if action=="manual_journal":
+        # The posting source_key is assigned by the approval server. A
+        # submitter changing their supplied key must not bypass duplicate
+        # protection for an otherwise identical accounting adjustment.
+        fingerprint_data.pop("source_key",None)
     if action=="invoice_tax_status":
         fingerprint_data.pop("changed_by",None)
     normalized=_canonical(fingerprint_data)
