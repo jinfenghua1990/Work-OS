@@ -26,6 +26,7 @@ import finance_reconcile
 import invoice_bulk
 import invoice_red
 import finance_identity
+import finance_close
 import local_auth
 import xlsx_reader
 import exhibition_assets
@@ -1546,6 +1547,10 @@ class Api(BaseHTTPRequestHandler):
             if path == "/api/bike/receipts":
                 rows=conn.execute("SELECT r.*,o.alsvid_order_no,o.sku FROM bike_receipts r JOIN bike_orders o ON o.id=r.bike_order_id ORDER BY r.received_on DESC,r.created_at DESC").fetchall()
                 return self.reply(200,[dict(row) for row in rows])
+            if path == "/api/periods/close/requests":
+                if not finance_identity.enabled():
+                    return self.reply(200,{"named_accounts":False,"requests":[]})
+                return self.reply(200,{"named_accounts":True,"requests":finance_close.requests(conn)})
             if path == "/api/periods":
                 rows = conn.execute("SELECT period,closed_at,closed_by,reviewed_checks,journal_count FROM period_locks ORDER BY period DESC").fetchall()
                 return self.reply(200, [dict(row) for row in rows])
@@ -1859,9 +1864,22 @@ class Api(BaseHTTPRequestHandler):
                 return self.save_inventory_safety_stock(data)
             if path == "/api/inventory/adjustments":
                 return self.create_inventory_adjustment(data)
+            if path == "/api/periods/close/request":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"independent finance close requires named accounts"})
+                return self.submit_period_close(data)
+            if path == "/api/periods/close/approve":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"independent finance close requires named accounts"})
+                return self.approve_period_close(data)
+            if path == "/api/periods/close/cancel":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"independent finance close requires named accounts"})
+                return self.cancel_period_close(data)
             if path == "/api/periods/close":
                 if finance_identity.enabled():
-                    data["closed_by"]=self._principal["username"]
+                    return self.reply(409,{"error":"named mode requires independent close request and reviewer",
+                                           "code":"WORKOS_PERIOD_CLOSE_APPROVAL_REQUIRED"})
                 return self.close_period(data)
             if path == "/api/journals/adjustments":
                 return self.create_manual_journal(data)
@@ -1944,6 +1962,8 @@ class Api(BaseHTTPRequestHandler):
                     data["changed_by"]=self._principal["username"]
                 return self.update_invoice_tax_status(data)
             return self.reply(404, {"error": "not found"})
+        except PermissionError as exc:
+            return self.reply(403, {"error": str(exc)})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return self.reply(422, {"error": str(exc)})
         except DB_INTEGRITY_ERRORS as exc:
@@ -3812,6 +3832,28 @@ class Api(BaseHTTPRequestHandler):
             conn.execute("INSERT INTO invoice_tax_history (id,invoice_id,old_status,new_status,evidence_ref,changed_at,changed_by,effective_on,tax_period) VALUES(?,?,?,?,?,?,?,?,?)", (str(uuid4()), invoice_id, invoice["tax_status"], status, evidence, now(), str(data.get("changed_by", "local-user")),effective_on,effective_on[:7]))
             return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "effective_on":effective_on,"tax_period":effective_on[:7],"tax_credit_recognized": False, "accounting_effect": "none", "duplicate": False})
 
+    def submit_period_close(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_close.submit(
+                conn,data,self._principal,now,PERIOD_REVIEW_CHECKS,period_close_readiness
+            )
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def approve_period_close(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_close.approve(
+                conn,data,self._principal,now,period_close_readiness
+            )
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def cancel_period_close(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_close.cancel(conn,data,self._principal,now)
+        return self.reply(200 if result["duplicate"] else 201,result)
+
     def close_period(self, data: dict) -> None:
         period = str(data["period"])
         try:
@@ -3856,6 +3898,7 @@ def postgres_schema_status() -> dict:
         "purchases", "stock_layers", "sales_imports",
         "bank_transactions", "invoices", "invoice_credit_notes", "tax_rate_rules",
         "finance_users", "finance_personal_advance_reviews",
+        "finance_period_close_requests",
         "journal_entries", "journal_lines", "personal_advances",
         "archive_files", "archive_links", "sample_dispositions",
         "evidence.original_documents", "evidence.row_snapshots",
