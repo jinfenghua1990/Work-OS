@@ -81,6 +81,7 @@ def main() -> None:
         with server._psycopg.connect(test_url, autocommit=True) as pg:
             if version(pg) != 45:
                 raise AssertionError("CI bootstrap expected schema 45")
+            pg.execute("DROP TABLE public.finance_period_close_requests")
             pg.execute("DROP TABLE public.finance_personal_advance_reviews")
             pg.execute("DROP TABLE public.finance_users")
             pg.execute("DROP TABLE public.tax_rate_rules")
@@ -140,6 +141,8 @@ def main() -> None:
                 raise AssertionError("v45 users table missing")
             if pg.execute("SELECT to_regclass('public.finance_personal_advance_reviews')").fetchone()[0] is None:
                 raise AssertionError("v45 review table missing")
+            if pg.execute("SELECT to_regclass('public.finance_period_close_requests')").fetchone()[0] is None:
+                raise AssertionError("v45 independent close-review table missing")
             if pg.execute("SELECT COUNT(*) FROM public.finance_users").fetchone()[0] != 0:
                 raise AssertionError("migration unexpectedly created named credentials")
             expect_rejected(pg, sql45, "schema 44 required")
