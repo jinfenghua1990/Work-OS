@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS finance_action_reviews (
     source_key TEXT NOT NULL UNIQUE,
     action_type TEXT NOT NULL CHECK(action_type IN ('bank_allocation','manual_journal','invoice_tax_status')),
     payload TEXT NOT NULL,
+    action_fingerprint TEXT NOT NULL,
     expected_before TEXT,
     submitted_by_user_id TEXT NOT NULL REFERENCES finance_users(id),
     submitted_at TEXT NOT NULL,
@@ -62,6 +63,9 @@ CREATE TABLE IF NOT EXISTS finance_action_reviews (
 );
 CREATE INDEX IF NOT EXISTS ix_finance_action_reviews_status
     ON finance_action_reviews(status,submitted_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_finance_review_active_fingerprint
+    ON finance_action_reviews(action_fingerprint)
+    WHERE status IN ('pending','approved');
 
 INSERT INTO schema_migrations(version,applied_at)
 VALUES(45,CURRENT_TIMESTAMP::text)
