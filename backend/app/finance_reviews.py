@@ -7,6 +7,7 @@ No generic URL, SQL, or arbitrarily selected handler can be executed.
 from __future__ import annotations
 
 import json
+import hashlib
 from uuid import uuid4
 
 ACTIONS = {
@@ -56,12 +57,34 @@ def submit(conn, raw:dict, actor:dict, now):
             "tax_evidence_ref":invoice["tax_evidence_ref"]
         },ensure_ascii=False,sort_keys=True,separators=(",",":"))
 
+    # Deduplicate business intent even when a caller picks a fresh request ID.
+    # Client-supplied audit identity / execution keys never define the action.
+    fingerprint_data=json.loads(payload)
+    if action=="bank_allocation":
+        fingerprint_data.pop("action_key",None)
+    if action=="invoice_tax_status":
+        fingerprint_data.pop("changed_by",None)
+    normalized=_canonical(fingerprint_data)
+    fingerprint=hashlib.sha256(
+        (action+"\\x1f"+normalized+"\\x1f"+(expectation or "")).encode("utf-8")
+    ).hexdigest()
+    duplicate=conn.execute(
+        "SELECT id,status,submitted_by_user_id FROM finance_action_reviews "
+        "WHERE action_fingerprint=? AND status IN ('pending','approved')",
+        (fingerprint,)
+    ).fetchone()
+    if duplicate:
+        if duplicate["submitted_by_user_id"]!=actor["id"]:
+            raise ValueError("same financial action is already pending or approved by another submitter")
+        return {"id":duplicate["id"],"status":duplicate["status"],
+                "action_type":action,"duplicate":True}
     request_id=str(uuid4())
     conn.execute(
         "INSERT INTO finance_action_reviews "
-        "(id,source_key,action_type,payload,expected_before,submitted_by_user_id,"
-        "submitted_at,status) VALUES(?,?,?,?,?,?,?,'pending')",
-        (request_id,source_key,action,payload,expectation,actor["id"],now())
+        "(id,source_key,action_type,payload,action_fingerprint,expected_before,"
+        "submitted_by_user_id,submitted_at,status) "
+        "VALUES(?,?,?,?,?,?,?,?,'pending')",
+        (request_id,source_key,action,payload,fingerprint,expectation,actor["id"],now())
     )
     return {"id":request_id,"action_type":action,"status":"pending","duplicate":False}
 
