@@ -39,6 +39,10 @@ jobs:
         env:
           WORKOS_TEST_POSTGRES_URL: postgresql://workos_test:temporary-ci-only-password@127.0.0.1:5432/workos_ci
         run: python -m unittest discover -s backend/tests -p 'test_postgres_live.py' -v
+      - name: Rehearse exact schema 43 → 44 → 45 SQL against disposable local PostgreSQL
+        env:
+          WORKOS_TEST_POSTGRES_URL: postgresql://workos_test:temporary-ci-only-password@127.0.0.1:5432/workos_ci
+        run: python backend/check_migrations_ci.py
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
