@@ -27,6 +27,23 @@ CREATE TABLE IF NOT EXISTS finance_personal_advance_reviews (
 );
 CREATE INDEX IF NOT EXISTS ix_finance_advances_preparer
     ON finance_personal_advance_reviews(submitted_by_user_id,submitted_at);
+CREATE TABLE IF NOT EXISTS finance_period_close_requests (
+    id TEXT PRIMARY KEY,
+    source_key TEXT NOT NULL UNIQUE,
+    period TEXT NOT NULL,
+    review_checks TEXT NOT NULL,
+    requested_by_user_id TEXT NOT NULL REFERENCES finance_users(id),
+    requested_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','approved','cancelled')),
+    approved_by_user_id TEXT REFERENCES finance_users(id),
+    approved_at TEXT,
+    cancelled_by_user_id TEXT REFERENCES finance_users(id),
+    cancelled_at TEXT,
+    CHECK(approved_by_user_id IS NULL OR approved_by_user_id != requested_by_user_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_finance_pending_period_close
+    ON finance_period_close_requests(period) WHERE status='pending';
+
 INSERT INTO schema_migrations(version,applied_at)
 VALUES(45,CURRENT_TIMESTAMP::text)
 ON CONFLICT(version) DO NOTHING;
