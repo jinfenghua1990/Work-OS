@@ -43,6 +43,19 @@ jobs:
         env:
           WORKOS_TEST_POSTGRES_URL: postgresql://workos_test:temporary-ci-only-password@127.0.0.1:5432/workos_ci
         run: python backend/check_migrations_ci.py
+      - name: Restore disposable PostgreSQL dump into an empty CI database
+        env:
+          WORKOS_TEST_POSTGRES_URL: postgresql://workos_test:temporary-ci-only-password@127.0.0.1:5432/workos_ci
+        run: |
+          set -euo pipefail
+          container_id="$(docker ps --filter ancestor=postgres:18-alpine --format '{{.ID}}' | head -n 1)"
+          test -n "$container_id" || { echo "PostgreSQL 18 CI container unavailable"; exit 1; }
+          docker exec "$container_id" pg_dump -U workos_test -d workos_ci -Fc -f /tmp/workos_restore_ci.dump
+          docker exec "$container_id" pg_restore --list /tmp/workos_restore_ci.dump > /dev/null
+          docker exec "$container_id" createdb -U workos_test -T template0 workos_restore_ci
+          docker exec "$container_id" pg_restore -U workos_test -d workos_restore_ci --no-owner --no-acl /tmp/workos_restore_ci.dump
+          python backend/check_pg_restore_ci.py
+          docker exec "$container_id" dropdb -U workos_test workos_restore_ci
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
