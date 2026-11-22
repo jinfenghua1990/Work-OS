@@ -66,7 +66,7 @@ def submit(conn, raw:dict, actor:dict, now):
         fingerprint_data.pop("changed_by",None)
     normalized=_canonical(fingerprint_data)
     fingerprint=hashlib.sha256(
-        (action+"\\x1f"+normalized+"\\x1f"+(expectation or "")).encode("utf-8")
+        (action+chr(31)+normalized+chr(31)+(expectation or "")).encode("utf-8")
     ).hexdigest()
     duplicate=conn.execute(
         "SELECT id,status,submitted_by_user_id FROM finance_action_reviews "
