@@ -25,8 +25,13 @@ def check_configuration():
         raise RuntimeError("请在私有 .env 配置 WORKOS_DATABASE_URL")
     if os.environ.get("WORKOS_EVIDENCE_STORAGE","r2").strip().lower()!="r2":
         raise RuntimeError("共享模式原始文件必须存储在 Cloudflare R2")
-    if not server.local_auth.enabled() or not server.local_auth.configured_hash_valid():
-        raise RuntimeError("共享模式必须设置有效的 WORKOS_AUTH_PASSWORD_HASH")
+    if server.finance_identity.enabled():
+        # Named mode has no shared owner password. Account provisioning is offline,
+        # and the API refuses login when no named users have been created.
+        if not server.finance_identity.ROLES:
+            raise RuntimeError("具名权限设置无效")
+    elif not server.local_auth.enabled() or not server.local_auth.configured_hash_valid():
+        raise RuntimeError("共享模式需 WORKOS_AUTH_PASSWORD_HASH 或 WORKOS_AUTH_MODE=named")
     required=("WORKOS_R2_ACCOUNT_ID","WORKOS_R2_BUCKET",
               "WORKOS_R2_ACCESS_KEY_ID","WORKOS_R2_SECRET_ACCESS_KEY",
               "WORKOS_ARCHIVE_ROOT")

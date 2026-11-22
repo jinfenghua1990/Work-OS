@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+from contextlib import nullcontext
 import re
 import sqlite3
 from datetime import date, datetime, timezone
@@ -24,6 +25,10 @@ import personal_advances
 import alsvid_finance_summary
 import finance_reconcile
 import invoice_bulk
+import invoice_red
+import finance_identity
+import finance_close
+import finance_reviews
 import local_auth
 import xlsx_reader
 import exhibition_assets
@@ -60,7 +65,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 43
+LATEST_SCHEMA_VERSION = 45
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -311,10 +316,30 @@ def init_db() -> None:
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
                     return
+                if version is not None and int(version)==44:
+                    conn.execute("BEGIN")
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
+                if version is not None and int(version)==43:
+                    conn.execute("BEGIN")
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
+                    return
                 if version is not None and int(version)==42:
                     conn.execute("BEGIN")
                     personal_advances.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -324,6 +349,10 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
                     personal_advances.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -333,6 +362,12 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     r2_evidence.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -344,6 +379,12 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     r2_evidence.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -357,6 +398,12 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     r2_evidence.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -375,6 +422,12 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     r2_evidence.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -410,6 +463,12 @@ def init_db() -> None:
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(41,?)",(now(),))
                     r2_evidence.ensure_tables(conn)
                     conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)",(now(),))
+                    personal_advances.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)",(now(),))
+                    invoice_red.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)",(now(),))
+                    finance_identity.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)",(now(),))
                     ensure_postgres_triggers(conn)
                     conn.commit()
                     return
@@ -947,6 +1006,10 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(42,?)", (now(),))
         personal_advances.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(43,?)", (now(),))
+        invoice_red.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)", (now(),))
+        finance_identity.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1176,6 +1239,14 @@ class Api(BaseHTTPRequestHandler):
         if host_header not in ("127.0.0.1","localhost"):
             self.reply(403,{"error":"invalid local request host"})
             return False
+        if finance_identity.enabled():
+            with db() as conn:
+                self._principal=finance_identity.principal(conn,self.headers)
+            if self._principal is None:
+                self.reply(401,{"error":"named finance login required","code":"WORKOS_AUTH_REQUIRED"})
+                return False
+            return True
+        self._principal=None
         if not local_auth.authenticated(self.headers):
             self.reply(401,{"error":"login required","code":"WORKOS_AUTH_REQUIRED"})
             return False
@@ -1189,6 +1260,14 @@ class Api(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path=="/api/auth/status":
+            if finance_identity.enabled():
+                with db() as conn:
+                    subject=finance_identity.principal(conn,self.headers)
+                return self.reply(200,{"requires_login":True,
+                    "authenticated":subject is not None,
+                    "username":subject["username"] if subject else None,
+                    "role":subject["role"] if subject else None,
+                    "named_accounts":True,"local_only":True})
             return self.reply(200,{"requires_login":local_auth.enabled(),
                 "authenticated":local_auth.authenticated(self.headers),
                 "role":"owner" if local_auth.authenticated(self.headers) else None,
@@ -1470,6 +1549,15 @@ class Api(BaseHTTPRequestHandler):
             if path == "/api/bike/receipts":
                 rows=conn.execute("SELECT r.*,o.alsvid_order_no,o.sku FROM bike_receipts r JOIN bike_orders o ON o.id=r.bike_order_id ORDER BY r.received_on DESC,r.created_at DESC").fetchall()
                 return self.reply(200,[dict(row) for row in rows])
+            if path == "/api/finance/reviews":
+                if not finance_identity.enabled():
+                    return self.reply(200,{"named_accounts":False,"requests":[]})
+                return self.reply(200,{"named_accounts":True,
+                    "requests":finance_reviews.list_requests(conn)})
+            if path == "/api/periods/close/requests":
+                if not finance_identity.enabled():
+                    return self.reply(200,{"named_accounts":False,"requests":[]})
+                return self.reply(200,{"named_accounts":True,"requests":finance_close.requests(conn)})
             if path == "/api/periods":
                 rows = conn.execute("SELECT period,closed_at,closed_by,reviewed_checks,journal_count FROM period_locks ORDER BY period DESC").fetchall()
                 return self.reply(200, [dict(row) for row in rows])
@@ -1651,7 +1739,11 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(200, transactions)
             if path == "/api/invoices":
                 rows = conn.execute("SELECT i.*,COALESCE((SELECT SUM(l.linked_amount) FROM invoice_links l WHERE l.invoice_id=i.id),'0.00') AS linked_amount FROM invoices i ORDER BY i.issued_on DESC,i.created_at DESC").fetchall()
-                return self.reply(200, [dict(row) for row in rows])
+                return self.reply(200, [{**dict(row),**invoice_red.net_for(conn,row["id"])} for row in rows])
+            if path == "/api/invoices/red":
+                return self.reply(200, invoice_red.list_credit_notes(conn))
+            if path == "/api/tax/rates":
+                return self.reply(200, invoice_red.list_rates(conn))
             if path == "/api/purchases":
                 rows = conn.execute("SELECT * FROM purchases ORDER BY created_at DESC").fetchall()
                 result=[]
@@ -1697,6 +1789,16 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(403,{"error":"invalid local request host"})
             try:
                 data=self.body()
+                if finance_identity.enabled():
+                    with db() as conn:
+                        token=finance_identity.login(
+                            conn,self.client_address[0],data.get("username"),data.get("password"))
+                        subject=finance_identity.principal(conn,{"Cookie":f"workos_named={token}"}) if token else None
+                    if not token or subject is None:
+                        return self.reply(401,{"error":"invalid credentials or temporarily rate-limited"})
+                    return self.reply(200,{"authenticated":True,"username":subject["username"],
+                        "role":subject["role"],"named_accounts":True},
+                        cookie=finance_identity.cookie(token))
                 if not local_auth.enabled():
                     return self.reply(200,{"authenticated":True,"local_only":True})
                 password=data.get("password")
@@ -1712,9 +1814,17 @@ class Api(BaseHTTPRequestHandler):
         if not self._session_valid():
             return
         if path=="/api/auth/logout":
+            if finance_identity.enabled():
+                finance_identity.logout(self.headers)
+                return self.reply(200,{"authenticated":False},
+                                  cookie=finance_identity.clear_cookie())
             local_auth.end_session(self.headers)
             return self.reply(200,{"authenticated":False},
                               cookie=local_auth.clear_cookie())
+        if finance_identity.enabled() and not finance_identity.can_write(
+            getattr(self,"_principal",None),path
+        ) and path!="/api/import/preview-xlsx":
+            return self.reply(403,{"error":"insufficient finance role","code":"WORKOS_FINANCE_FORBIDDEN"})
         # ALSVID owns purchase, receipt, sale and landed-cost business facts.
         # Legacy creator endpoints remain GET-readable for migration/review,
         # but must never write a second bike business ledger in Work OS.
@@ -1761,9 +1871,39 @@ class Api(BaseHTTPRequestHandler):
                 return self.save_inventory_safety_stock(data)
             if path == "/api/inventory/adjustments":
                 return self.create_inventory_adjustment(data)
+            if path == "/api/finance/reviews/request":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"named finance accounts required for independent review"})
+                return self.submit_finance_review(data)
+            if path == "/api/finance/reviews/approve":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"named finance accounts required for independent review"})
+                return self.approve_finance_review(data)
+            if path == "/api/finance/reviews/cancel":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"named finance accounts required for independent review"})
+                return self.cancel_finance_review(data)
+            if path == "/api/periods/close/request":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"independent finance close requires named accounts"})
+                return self.submit_period_close(data)
+            if path == "/api/periods/close/approve":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"independent finance close requires named accounts"})
+                return self.approve_period_close(data)
+            if path == "/api/periods/close/cancel":
+                if not finance_identity.enabled():
+                    return self.reply(409,{"error":"independent finance close requires named accounts"})
+                return self.cancel_period_close(data)
             if path == "/api/periods/close":
+                if finance_identity.enabled():
+                    return self.reply(409,{"error":"named mode requires independent close request and reviewer",
+                                           "code":"WORKOS_PERIOD_CLOSE_APPROVAL_REQUIRED"})
                 return self.close_period(data)
             if path == "/api/journals/adjustments":
+                if finance_identity.enabled():
+                    return self.reply(409,{"error":"manual journal requires independent review",
+                        "code":"WORKOS_FINANCE_APPROVAL_REQUIRED"})
                 return self.create_manual_journal(data)
             if path == "/api/opening-balances":
                 return self.import_opening_balances(data)
@@ -1780,11 +1920,24 @@ class Api(BaseHTTPRequestHandler):
             if path == "/api/open-items/fx-review":
                 return self.review_open_item_fx(data)
             if path == "/api/bank/allocate":
+                if finance_identity.enabled():
+                    return self.reply(409,{"error":"bank allocation requires independent review",
+                        "code":"WORKOS_FINANCE_APPROVAL_REQUIRED"})
                 return self.allocate_bank(data)
             if path == "/api/bank/cash-flow-classification":
                 return self.classify_cash_flow(data)
             if path == "/api/invoices":
                 return self.create_invoice(data)
+            if path == "/api/invoices/red":
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    result=invoice_red.register_credit(conn,data,ensure_open,now,original_archive.link_document)
+                return self.reply(200 if result["duplicate"] else 201,result)
+            if path == "/api/tax/rates":
+                with db() as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    result=invoice_red.register_rate(conn,data,ensure_open,now)
+                return self.reply(200 if result["duplicate"] else 201,result)
             if path == "/api/invoices/import":
                 return self.import_invoices(data)
             if path == "/api/personal-advances":
@@ -1830,8 +1983,13 @@ class Api(BaseHTTPRequestHandler):
             if path == "/api/invoices/link":
                 return self.link_invoice(data)
             if path == "/api/invoices/tax-status":
+                if finance_identity.enabled():
+                    return self.reply(409,{"error":"invoice tax-status confirmation requires independent review",
+                        "code":"WORKOS_FINANCE_APPROVAL_REQUIRED"})
                 return self.update_invoice_tax_status(data)
             return self.reply(404, {"error": "not found"})
+        except PermissionError as exc:
+            return self.reply(403, {"error": str(exc)})
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             return self.reply(422, {"error": str(exc)})
         except DB_INTEGRITY_ERRORS as exc:
@@ -1907,7 +2065,7 @@ class Api(BaseHTTPRequestHandler):
             conn.execute("INSERT INTO opening_balance_imports (id,source_key,as_of,payload,journal_entry_id,created_at) VALUES(?,?,?,?,?,?)",(import_id,source_key,as_of,payload,entry_id,now()))
             return self.reply(201,{"id":import_id,"as_of":as_of,"status":"imported","journal_entry_id":entry_id,"debit_total":str(debit_total),"credit_total":str(credit_total),"accounts":len(lines)})
 
-    def create_manual_journal(self,data:dict)->None:
+    def create_manual_journal(self,data:dict,conn=None)->None:
         source_key=str(data.get("source_key","")).strip()
         posted_on=str(data.get("posted_on",date.today().isoformat())).strip()
         business_line=str(data.get("business_line","corporate")).strip()
@@ -1938,8 +2096,11 @@ class Api(BaseHTTPRequestHandler):
         if debit_total!=credit_total:raise ValueError("adjustment journal must balance")
         if debit_total<=0:raise ValueError("adjustment journal total must be positive")
         payload=json.dumps({"posted_on":posted_on,"business_line":business_line,"entity_code":entity_code,"project_code":project_code,"description":description,"lines":[{"account":a,"debit":str(d),"credit":str(c)} for a,d,c in lines]},ensure_ascii=False,sort_keys=True,separators=(",",":"))
-        with db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (nullcontext(conn) if conn is not None else db()) as current_conn:
+            standalone=conn is None
+            conn=current_conn
+            if standalone:
+                conn.execute("BEGIN IMMEDIATE")
             previous=conn.execute("SELECT payload,journal_entry_id FROM manual_journal_requests WHERE source_key=?",(source_key,)).fetchone()
             if previous:
                 if previous["payload"]!=payload:raise ValueError("source_key already exists with different adjustment journal content")
@@ -2446,18 +2607,31 @@ class Api(BaseHTTPRequestHandler):
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             result=personal_advances.import_drafts(conn,data,now)
+            if finance_identity.enabled():
+                for item in result["created"]:
+                    finance_identity.record_submission(conn,item["id"],self._principal,now)
         return self.reply(200,result)
 
     def create_personal_advance(self,data:dict)->None:
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             result=personal_advances.draft(conn,data,now)
+            if finance_identity.enabled() and not result["duplicate"]:
+                finance_identity.record_submission(conn,result["id"],self._principal,now)
         return self.reply(200 if result["duplicate"] else 201,result)
 
     def approve_personal_advance(self,data:dict)->None:
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if finance_identity.enabled():
+                subject=self._principal
+                finance_identity.verify_independent_approver(
+                    conn,str(data.get("advance_id") or ""),subject)
+                data={**data,"approved_by":subject["username"]}
             result=personal_advances.approve(conn,data,now,ensure_open,journal)
+            if finance_identity.enabled() and not result["duplicate"]:
+                finance_identity.record_approval(
+                    conn,str(data["advance_id"]),self._principal,now)
         return self.reply(200 if result["duplicate"] else 201,result)
 
     def create_expense(self, data: dict) -> None:
@@ -3448,7 +3622,7 @@ class Api(BaseHTTPRequestHandler):
             conn.execute("UPDATE bank_transactions SET cash_flow_category=?,cash_flow_note=?,cash_flow_classified_at=? WHERE id=?",(category,note,now(),bank_id))
             return self.reply(200,{"bank_transaction_id":bank_id,"category":category,"status":"classified"})
 
-    def allocate_bank(self, data: dict) -> None:
+    def allocate_bank(self, data: dict, conn=None) -> None:
         bank_id = str(data["bank_transaction_id"])
         allocations = data.get("allocations")
         if not isinstance(allocations, list) or not allocations:
@@ -3459,8 +3633,11 @@ class Api(BaseHTTPRequestHandler):
         payload={"bank_transaction_id":bank_id,"allocations":normalized}
         serialized=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":"))
         action_key=str(data.get("action_key","")).strip() or "bank_allocate:"+hashlib.sha256(serialized.encode()).hexdigest()
-        with db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (nullcontext(conn) if conn is not None else db()) as current_conn:
+            standalone=conn is None
+            conn=current_conn
+            if standalone:
+                conn.execute("BEGIN IMMEDIATE")
             prior=conn.execute("SELECT action_type,payload,response FROM financial_action_requests WHERE action_key=?",(action_key,)).fetchone()
             if prior:
                 if prior["action_type"]!="bank_allocate" or prior["payload"]!=serialized:
@@ -3647,14 +3824,14 @@ class Api(BaseHTTPRequestHandler):
             ensure_open(conn,invoice["issued_on"])
             used = sum((Decimal(x[0]) for x in conn.execute("SELECT linked_amount FROM invoice_links WHERE invoice_id=?", (invoice_id,))), Decimal(0))
             target_used = sum((Decimal(x[0]) for x in conn.execute("SELECT linked_amount FROM invoice_links WHERE target_type=? AND target_id=?", (target_type,target_id))), Decimal(0))
-            if used + value > Decimal(invoice["total_amount"]) or target_used + value > Decimal(target["original_amount"]):
+            if used + value > Decimal(invoice_red.net_for(conn,invoice_id)["net_amount"]) or target_used + value > Decimal(target["original_amount"]):
                 raise ValueError("links exceed invoice total or linked business item amount")
             conn.execute("INSERT INTO invoice_links VALUES(?,?,?,?,?,?)", (str(uuid4()), invoice_id, target_type, target_id, str(value), now()))
             response={"invoice_id": invoice_id, "linked_amount": str(value), "tax_status": invoice["tax_status"], "tax_credit_recognized": False, "accounting_effect": "none"}
             conn.execute("INSERT INTO financial_action_requests VALUES(?,?,?,?,?)",(action_key,"invoice_link",serialized,json.dumps(response,ensure_ascii=False,sort_keys=True),now()))
             return self.reply(201,response)
 
-    def update_invoice_tax_status(self, data: dict) -> None:
+    def update_invoice_tax_status(self, data: dict, conn=None) -> None:
         invoice_id, status = str(data["invoice_id"]), str(data["tax_status"])
         effective_on=str(data.get("effective_on") or date.today().isoformat())
         if len(effective_on)!=10:
@@ -3665,8 +3842,11 @@ class Api(BaseHTTPRequestHandler):
             raise ValueError("tax status effective_on must be a valid date")
         if status not in ("pending", "eligible", "certified_deductible", "non_deductible", "void"):
             raise ValueError("invalid tax status")
-        with db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (nullcontext(conn) if conn is not None else db()) as current_conn:
+            standalone=conn is None
+            conn=current_conn
+            if standalone:
+                conn.execute("BEGIN IMMEDIATE")
             invoice = conn.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
             if not invoice:
                 raise ValueError("invoice not found")
@@ -3686,6 +3866,82 @@ class Api(BaseHTTPRequestHandler):
             conn.execute("UPDATE invoices SET tax_status=?,tax_evidence_ref=? WHERE id=?", (status, evidence, invoice_id))
             conn.execute("INSERT INTO invoice_tax_history (id,invoice_id,old_status,new_status,evidence_ref,changed_at,changed_by,effective_on,tax_period) VALUES(?,?,?,?,?,?,?,?,?)", (str(uuid4()), invoice_id, invoice["tax_status"], status, evidence, now(), str(data.get("changed_by", "local-user")),effective_on,effective_on[:7]))
             return self.reply(200, {"invoice_id": invoice_id, "tax_status": status, "tax_evidence_ref": evidence, "effective_on":effective_on,"tax_period":effective_on[:7],"tax_credit_recognized": False, "accounting_effect": "none", "duplicate": False})
+
+    def submit_finance_review(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_reviews.submit(conn,data,self._principal,now)
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def approve_finance_review(self,data:dict)->None:
+        request_id=str(data.get("request_id") or "").strip()
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            review,payload=finance_reviews.load_for_approval(
+                conn,request_id,self._principal
+            )
+            if payload is None:
+                result=finance_reviews.already_approved(review)
+            else:
+                action=review["action_type"]
+                if action=="invoice_tax_status":
+                    # Never trust an identity in the submitter's JSON.
+                    payload["changed_by"]=self._principal["username"]
+                    method=self.update_invoice_tax_status
+                elif action=="bank_allocation":
+                    payload["action_key"]="approval:"+review["id"]
+                    method=self.allocate_bank
+                elif action=="manual_journal":
+                    payload["source_key"]="approval:"+review["id"]
+                    method=self.create_manual_journal
+                else:
+                    raise ValueError("unsupported finance approval action")
+                original_reply=self.reply
+                try:
+                    # Capture the operation result WITHOUT sending an HTTP
+                    # success before its enclosing transaction commits.
+                    self.reply=lambda status,body: (status,body)
+                    status,posted=method(payload,conn=conn)
+                finally:
+                    self.reply=original_reply
+                if status >= 400:
+                    raise ValueError("approved financial action was rejected: "+str(posted))
+                result=finance_reviews.record_approval(
+                    conn,review,self._principal,now,
+                    {"http_status":status,"posting":posted}
+                )
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def cancel_finance_review(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_reviews.cancel(
+                conn,str(data.get("request_id") or "").strip(),
+                self._principal,now
+            )
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def submit_period_close(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_close.submit(
+                conn,data,self._principal,now,PERIOD_REVIEW_CHECKS,period_close_readiness
+            )
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def approve_period_close(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_close.approve(
+                conn,data,self._principal,now,period_close_readiness
+            )
+        return self.reply(200 if result["duplicate"] else 201,result)
+
+    def cancel_period_close(self,data:dict)->None:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result=finance_close.cancel(conn,data,self._principal,now)
+        return self.reply(200 if result["duplicate"] else 201,result)
 
     def close_period(self, data: dict) -> None:
         period = str(data["period"])
@@ -3729,8 +3985,10 @@ def postgres_schema_status() -> dict:
         raise RuntimeError("schema preflight only supports WORKOS_DB_BACKEND=postgres")
     critical = (
         "purchases", "stock_layers", "sales_imports",
-        "bank_transactions", "invoices", "journal_entries", "journal_lines",
-        "personal_advances",
+        "bank_transactions", "invoices", "invoice_credit_notes", "tax_rate_rules",
+        "finance_users", "finance_personal_advance_reviews",
+        "finance_period_close_requests", "finance_action_reviews",
+        "journal_entries", "journal_lines", "personal_advances",
         "archive_files", "archive_links", "sample_dispositions",
         "evidence.original_documents", "evidence.row_snapshots",
         "evidence.import_batches",
@@ -3785,7 +4043,7 @@ def main() -> None:
     local_auth.require_loopback_host(host)
     if not local_auth.configured_hash_valid():
         raise RuntimeError("invalid WORKOS_AUTH_PASSWORD_HASH")
-    if not local_auth.enabled():
+    if not finance_identity.enabled() and not local_auth.enabled():
         print("WARNING: local password not configured; this API must remain on loopback.")
     require_database_ready()
     port = int(os.environ.get("WORKOS_PORT", "8103"))
