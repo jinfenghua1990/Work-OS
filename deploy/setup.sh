@@ -12,6 +12,22 @@ SEED="$REPO/deploy/seed/workos.sqlite3"
 
 echo "==> 仓库: $REPO"
 
+# 0. 前置检查：运行时与端口
+echo "==> 检查运行时"
+NPM_BIN="$(command -v npm || true)"
+PYTHON_BIN="$(command -v python3 || true)"
+[ -n "$NPM_BIN" ] || { echo "错误: 找不到 npm，请先安装 Node.js 20+"; exit 1; }
+[ -n "$PYTHON_BIN" ] || { echo "错误: 找不到 python3，请先安装 Python 3.11+"; exit 1; }
+echo "    npm: $NPM_BIN"
+echo "    python3: $PYTHON_BIN"
+for port in 8082 8106; do
+  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "错误: 端口 $port 已被占用，请先停掉占用进程或已有 Work-OS 服务"
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN
+    exit 1
+  fi
+done
+
 # 1. 前端依赖与构建
 echo "==> 安装前端依赖"
 cd "$REPO"
@@ -34,7 +50,8 @@ mkdir -p "$LAUNCH_DIR" "$LOG_DIR"
 for label in com.gino.workos-api com.gino.workos-web; do
   src="$REPO/deploy/launchagents/$label.plist"
   dst="$LAUNCH_DIR/$label.plist"
-  sed -e "s|__REPO__|$REPO|g" -e "s|__HOME__|$HOME_DIR|g" "$src" > "$dst"
+  sed -e "s|__REPO__|$REPO|g" -e "s|__HOME__|$HOME_DIR|g" \
+      -e "s|__NPM__|$NPM_BIN|g" -e "s|__PYTHON__|$PYTHON_BIN|g" "$src" > "$dst"
   echo "    写入 $dst"
 done
 
@@ -49,12 +66,22 @@ launchctl kickstart -k "gui/$(id -u)/com.gino.workos-web"
 
 # 5. 等待就绪并打印访问地址
 echo "==> 等待服务就绪"
+READY=0
 for i in $(seq 1 20); do
   if curl -fsS -o /dev/null http://127.0.0.1:8082/api/health 2>/dev/null; then
+    READY=1
     break
   fi
   sleep 1
 done
+if [ "$READY" -ne 1 ]; then
+  echo "错误: 20 秒内服务未就绪。请查看日志："
+  echo "  $LOG_DIR/web.err.log"
+  echo "  $LOG_DIR/api.err.log"
+  echo "服务状态："
+  launchctl list | grep com.gino.workos || true
+  exit 1
+fi
 
 IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '<本机IP>')"
 echo ""

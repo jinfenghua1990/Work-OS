@@ -6,7 +6,7 @@
     <string>com.gino.workos-api</string>
     <key>ProgramArguments</key>
     <array>
-        <string>python3</string>
+        <string>__PYTHON__</string>
         <string>__REPO__/backend/run_offline.py</string>
     </array>
     <key>WorkingDirectory</key>

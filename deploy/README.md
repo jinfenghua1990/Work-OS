@@ -26,10 +26,12 @@ chmod +x deploy/setup.sh
 ```
 
 脚本做这些事：
-1. `npm install` + `npm run build`
-2. 若本地 `backend/data/workos.sqlite3` 不存在，从 `deploy/seed/workos.sqlite3` 复制一份作为初始账套（**已存在则不覆盖**，保护本地数据）
-3. 把 `deploy/launchagents/*.plist` 的路径占位符 `__REPO__` 替换为实际仓库路径，安装到 `~/Library/LaunchAgents/`
-4. `launchctl bootstrap` + `kickstart` 加载两个常驻服务
+1. **前置检查**：探测 `npm`/`python3` 绝对路径（不依赖固定 PATH，兼容 nvm/Homebrew），检查 8082/8106 端口未被占用；不满足则报错退出
+2. `npm install` + `npm run build`
+3. 若本地 `backend/data/workos.sqlite3` 不存在，从 `deploy/seed/workos.sqlite3` 复制一份作为初始账套（**已存在则不覆盖**，保护本地数据）
+4. 把 `deploy/launchagents/*.plist` 的占位符替换为实际值（`__REPO__` 仓库路径、`__HOME__` 用户目录、`__NPM__`/`__PYTHON__` 运行时绝对路径），安装到 `~/Library/LaunchAgents/`
+5. `launchctl bootstrap` + `kickstart` 加载两个常驻服务
+6. 等待健康检查（最多 20 秒），**失败则打印日志位置并退出非 0**，不会假报"部署完成"
 
 ## 访问
 

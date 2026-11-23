@@ -6,7 +6,7 @@
     <string>com.gino.workos-web</string>
     <key>ProgramArguments</key>
     <array>
-        <string>npm</string>
+        <string>__NPM__</string>
         <string>run</string>
         <string>preview</string>
         <string>--</string>
