@@ -25,7 +25,7 @@ export default defineConfig({
     proxy: apiProxy,
   },
   preview: {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 8082,
     strictPort: true,
     proxy: apiProxy,
