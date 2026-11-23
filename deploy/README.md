@@ -1,0 +1,64 @@
+# Work-OS 离线部署（另一台 Mac）
+
+这套资产把当前本机 8082 的离线部署完整搬到另一台 macOS 电脑：前端 8082（监听局域网）+ Python API 8106（仅 loopback）+ 初始账套快照。
+
+## 账套数据边界（先读）
+
+- `seed/workos.sqlite3` 是**空账套快照**：74 张表、schema 45、29 行默认科目表，**无任何真实业务数据**。
+- 它只用来给新机器一个与本机一致的初始化起点，不含凭证、银行流水、票据或个人信息。
+- 本仓库是 **public** 仓库，因此**永远不要把含真实业务数据的账套文件提交进来**。新机器产生的数据留在本地 `backend/data/`，该目录已被 `.gitignore` 排除。
+
+## 前置条件
+
+- macOS，Node.js 20+（含 npm）、Python 3.11+
+- 无需 PostgreSQL、Neon、R2、`.env` —— 离线模式完全本地
+
+## 一键部署
+
+在仓库根目录执行（会装依赖、灌入种子账套、构建前端、生成并加载两个 LaunchAgent）：
+
+```bash
+chmod +x deploy/setup.sh
+./deploy/setup.sh
+```
+
+脚本做这些事：
+1. `npm install` + `npm run build`
+2. 若本地 `backend/data/workos.sqlite3` 不存在，从 `deploy/seed/workos.sqlite3` 复制一份作为初始账套（**已存在则不覆盖**，保护本地数据）
+3. 把 `deploy/launchagents/*.plist` 的路径占位符 `__REPO__` 替换为实际仓库路径，安装到 `~/Library/LaunchAgents/`
+4. `launchctl bootstrap` + `kickstart` 加载两个常驻服务
+
+## 访问
+
+- 本机：`http://127.0.0.1:8082`
+- 局域网：脚本结束时打印本机 IP，同一网段设备用 `http://<IP>:8082` 访问
+
+## 端口与网络
+
+| 端口 | 服务 | 监听 |
+|---|---|---|
+| 8082 | Vite preview（前端 + `/api` 代理） | `0.0.0.0`（局域网可达） |
+| 8106 | Python 离线 API | `127.0.0.1`（仅本机，不暴露） |
+
+前端把 `/api` 反向代理到 8106，并把请求的 `Origin` 改写为 `http://127.0.0.1:8106`，落在后端白名单内，因此局域网访问不会被 403。
+
+## 运维
+
+```bash
+# 改完前端代码
+npm run build
+launchctl kickstart -k gui/$(id -u)/com.gino.workos-web
+
+# 查看状态 / 日志
+launchctl list | grep com.gino.workos
+tail -f ~/Library/Logs/WorkOS/web.err.log
+tail -f ~/Library/Logs/WorkOS/api.log
+
+# 卸载服务
+launchctl bootout gui/$(id -u)/com.gino.workos-web
+launchctl bootout gui/$(id -u)/com.gino.workos-api
+```
+
+## 安全提醒
+
+8082 对局域网开放且**无访问密码**。适合内网演示，不要暴露到公网，也不要把它当正式财务账套使用。生产切换走 `docs/PRODUCTION_ROLLOUT_V45.md` 的门禁。
