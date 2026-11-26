@@ -1,4 +1,4 @@
-"""Exercise EXACT reviewed schema-44/45 SQL on a disposable PostgreSQL database.
+"""Exercise EXACT reviewed schema-44/45/46 SQL on a disposable PostgreSQL database.
 
 This is only a CI/local test, never a Neon migration command. Refuses any
 address other than localhost and a source database other than workos_ci.
@@ -37,6 +37,7 @@ def exact_migration_sql(version: int) -> str:
     paths = {
         44: ROOT / "migrations" / "44_invoice_red_and_tax_rates.sql",
         45: ROOT / "migrations" / "45_named_finance_users.sql",
+        46: ROOT / "migrations" / "46_legacy_raw_records.sql",
     }
     return paths[version].read_text(encoding="utf-8")
 
@@ -76,11 +77,12 @@ def main() -> None:
         server.DB_BACKEND, server.DATABASE_URL = "postgres", test_url
 
         # Populate only an empty local CI DB. New-schema bootstrap is used
-        # to construct the known v43 base by removing ONLY v44/v45 objects.
+        # to construct the known v43 base by removing ONLY v44/v45/v46 objects.
         server.init_db()
         with server._psycopg.connect(test_url, autocommit=True) as pg:
-            if version(pg) != 45:
-                raise AssertionError("CI bootstrap expected schema 45")
+            if version(pg) != 46:
+                raise AssertionError("CI bootstrap expected schema 46")
+            pg.execute("DROP TABLE IF EXISTS evidence.legacy_source_records")
             pg.execute("DROP TABLE public.finance_action_reviews")
             pg.execute("DROP TABLE public.finance_period_close_requests")
             pg.execute("DROP TABLE public.finance_personal_advance_reviews")
@@ -91,7 +93,7 @@ def main() -> None:
             if version(pg) != 43:
                 raise AssertionError("failed to establish isolated schema 43")
 
-        # A source blue invoice is retained byte-for-byte through both DDL
+        # A source blue invoice is retained byte-for-byte through all DDL
         # upgrades; creating a red table must not mutate old accounting data.
         api = server.Api.__new__(server.Api)
         api.reply = lambda code, data: (code, data)
@@ -112,17 +114,19 @@ def main() -> None:
             ).fetchone()[0]
 
             if server.postgres_schema_status()["ready"]:
-                raise AssertionError("schema 43 must be rejected by v45 runtime")
+                raise AssertionError("schema 43 must be rejected by v46 runtime")
             try:
                 server.require_database_ready()
             except RuntimeError:
                 pass
             else:
-                raise AssertionError("v45 runtime accepted schema 43")
+                raise AssertionError("v46 runtime accepted schema 43")
 
             sql44 = exact_migration_sql(44)
             sql45 = exact_migration_sql(45)
+            sql46 = exact_migration_sql(46)
             expect_rejected(pg, sql45, "schema 44 required")
+            expect_rejected(pg, sql46, "schema 45 required")
             if version(pg) != 43:
                 raise AssertionError("failed v45 script wrote to v43 schema")
 
@@ -150,6 +154,17 @@ def main() -> None:
                 raise AssertionError("migration unexpectedly created named credentials")
             expect_rejected(pg, sql45, "schema 44 required")
 
+            pg.execute(sql46)
+            if version(pg) != 46:
+                raise AssertionError("v46 upgrade did not record version 46")
+            if pg.execute("SELECT to_regclass('evidence.legacy_source_records')").fetchone()[0] is None:
+                raise AssertionError("v46 legacy raw-record table missing")
+            if pg.execute(
+                "SELECT 1 FROM pg_trigger WHERE tgname='imm_legacy_source_records'"
+            ).fetchone() is None:
+                raise AssertionError("v46 legacy raw-record immutability trigger missing")
+            expect_rejected(pg, sql46, "schema 45 required")
+
             new = pg.execute(
                 "SELECT * FROM public.invoices WHERE id=%s", (source["id"],)
             ).fetchone()
@@ -159,8 +174,8 @@ def main() -> None:
             if old != new or old_journals != new_journals:
                 raise AssertionError("schema upgrades changed historical invoice or journal")
         server.require_database_ready()
-        print("PASS: exact 43→44→45 migration scripts, guards, original invoice,")
-        print("      no default users, journals unchanged and v45 runtime readiness")
+        print("PASS: exact 43→44→45→46 migration scripts, guards, original invoice,")
+        print("      no default users, journals unchanged and v46 runtime readiness")
     finally:
         server.DB_BACKEND, server.DATABASE_URL = original_backend, original_url
         try:
