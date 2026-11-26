@@ -1,5 +1,7 @@
 # 实施与验收路线
 
+> 本文记录历史实施与验收状态，文中出现的 schema 版本（如 36）是当时快照。当前代码基线为 **Schema 46**；最新变更见 `README.md`、`backend/migrations/46_legacy_raw_records.sql` 与 `docs/PRODUCTION_ROLLOUT_V45.md` 的 46 附加项。
+
 ## 交付顺序
 
 1. **已完成（本地开发基线）**：React/TypeScript 工作台、Python HTTP API、SQLite 持久化、Vite 本地代理和可重复执行的 schema migration（当前版本 36）。后端现提供可选 psycopg/PostgreSQL 适配；隔离 Neon `work-os-local-dev` 分支已初始化到 schema 36，Vite 代理通过本地 API 完成健康、采购、银行流水、平台收入和库存预警只读请求。默认无数据库配置时仍用本地 SQLite；SQLite 与 Neon 不自动复制数据。Neon 上业务写入流程和交易回滚尚待完整验收。
