@@ -11,6 +11,15 @@
 
 两个快照都已经是 schema 46，首次启动不需要再执行迁移。若要用于运行，直接复制为 `backend/data/workos.sqlite3` 即可。
 
+改动任一快照后，本地先跑一遍校验（CI 也会跑同一条命令）：
+
+```bash
+python backend/check_deploy_snapshots.py
+# PASS: deploy snapshots match the code schema and contain no business data
+```
+
+它只读打开快照（不会产生 `-wal`/`-shm`），检查四项：`schema_migrations` 最大值等于代码的 `LATEST_SCHEMA_VERSION`、`journal_mode` 为 `delete`、业务表全空、默认科目表非空。
+
 当前账套没有业务数据，所以全量上传不涉及隐私。若将来录入真实凭证/银行流水/票据：新机器产生的数据留在本地 `backend/data/`（已被 `.gitignore` 排除），**不要提交含真实业务数据的账套文件**——本仓库是 public。
 
 ## 前置条件

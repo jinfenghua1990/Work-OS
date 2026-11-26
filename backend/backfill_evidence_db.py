@@ -8,8 +8,9 @@ Examples:
   python backend/backfill_evidence_db.py
   WORKOS_EVIDENCE_BACKFILL_ALLOW=1 python backend/backfill_evidence_db.py --apply
 
-Requires the app schema to already be version 41. Original file bytes are
-never guessed from parsed sales, invoices or database ledger amounts.
+Requires the app schema to already be at server.LATEST_SCHEMA_VERSION (currently
+46); this script never migrates. Original file bytes are never guessed from
+parsed sales, invoices or database ledger amounts.
 """
 from __future__ import annotations
 

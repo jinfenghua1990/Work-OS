@@ -55,7 +55,11 @@ def checked_backup(db_source:Path,archive_root:Path,target_root:Path)->Path:
                 raise RuntimeError("backed up database integrity check failed")
             has_archive=copied.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='archive_files'").fetchone()
             records=copied.execute("SELECT id,sha256,size_bytes,storage_key FROM archive_files").fetchall() if has_archive else []
+            has_migrations=copied.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone()
+            version_row=copied.execute("SELECT MAX(version) FROM schema_migrations").fetchone() if has_migrations else None
+            schema_version=int(version_row[0]) if version_row and version_row[0] is not None else None
         manifest={"created_at":datetime.now(timezone.utc).isoformat(),
+                  "schema_version":schema_version,
                   "database_sha256":digest_file(db_snapshot),"documents":[]}
         for file_id,sha256,size,key in records:
             expected=f"{sha256[:2]}/{sha256[2:4]}/{sha256}"
@@ -96,7 +100,8 @@ def verify_backup(folder:Path)->dict:
         path=folder/"archive"/expected
         if path.stat().st_size!=document["size_bytes"] or digest_file(path)!=sha:
             raise ValueError("backed up original evidence failed SHA-256 check")
-    return {"files_verified":len(manifest["documents"]),"database_verified":True}
+    return {"files_verified":len(manifest["documents"]),"database_verified":True,
+            "schema_version":manifest.get("schema_version")}
 
 
 def main():

@@ -4111,7 +4111,9 @@ def main() -> None:
     if not finance_identity.enabled() and not local_auth.enabled():
         print("WARNING: local password not configured; this API must remain on loopback.")
     require_database_ready()
-    port = int(os.environ.get("WORKOS_PORT", "8103"))
+    # 8106 is the single documented API port; the retired 8103 default only
+    # ever produced a port the frontend proxy does not forward to.
+    port = int(os.environ.get("WORKOS_PORT", "8106"))
     server = ThreadingHTTPServer((host, port), Api)
     database_label = f"SQLite: {DB_PATH}" if DB_BACKEND == "sqlite" else "PostgreSQL"
     print(f"Work OS API ready at http://{host}:{port} ({database_label})")

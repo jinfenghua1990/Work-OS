@@ -19,6 +19,8 @@ npm run dev:full
 
 浏览器打开 `http://127.0.0.1:8085`（开发端口；8082 是本机部署预览使用的端口）。API 在 `http://127.0.0.1:8106`，前端通过本地代理访问。此启动方式固定使用本地 SQLite，并跳过 `.env` 文件加载，不会连接 Neon。停止两个服务按 `Ctrl+C`。
 
+判断"服务是否连上了正确的账套版本"直接看健康接口：`curl -s http://127.0.0.1:8106/api/health`，返回里的 `schema_version` 与 `required_schema_version` 相等、`schema_ready` 为 `true` 才算就绪。数据库版本落后时代码会拒绝启动，而不是带着缺表的库继续跑。
+
 需要 Node.js 和 Python 3.11 或更新版本。业务界面、API 和图标由项目本地源码提供；运行时不加载 CDN、远程字体或图片。npm 包只用于本地构建与 React 界面，虚拟环境中的 psycopg 驱动只用于连接 PostgreSQL。
 
 本机常驻部署（macOS LaunchAgent）：`com.gino.workos-api`（离线 API，8106）和 `com.gino.workos-web`（8082 生产构建预览）。改完前端后运行 `npm run build`，再执行 `launchctl kickstart -k gui/$(id -u)/com.gino.workos-web`；日志在 `~/Library/Logs/WorkOS/`。
