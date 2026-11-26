@@ -4041,6 +4041,12 @@ def require_database_ready() -> None:
     """Do not apply migrations to a cloud database just by starting the API."""
     if DB_BACKEND == "sqlite":
         init_db()
+        with db() as conn:
+            current = int(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0])
+        if current < LATEST_SCHEMA_VERSION:
+            # Legacy SQLite upgrade branches land on 45 and return; run one
+            # more idempotent pass so schema 46 is applied before serving.
+            init_db()
         return
     status = postgres_schema_status()
     if not status["ready"]:

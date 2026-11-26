@@ -69,6 +69,19 @@ class LegacyRawRecordTests(unittest.TestCase):
                     conn, "coffeebear-prod", "unknown_table", "X-1", '{"id":1}'
                 )
 
+    def test_schema_45_database_reaches_46_before_serving(self):
+        with server.db() as conn:
+            conn.execute("DROP TABLE evidence_legacy_source_records")
+            conn.execute("DELETE FROM schema_migrations WHERE version=46")
+        server.require_database_ready()
+        with server.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 46
+            )
+            self.assertIsNotNone(conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_legacy_source_records'"
+            ).fetchone())
+
 
 if __name__ == "__main__":
     unittest.main()
