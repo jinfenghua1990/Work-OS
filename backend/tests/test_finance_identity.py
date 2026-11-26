@@ -61,11 +61,14 @@ class NamedFinanceApprovalTests(unittest.TestCase):
             "archive_file_id":self.proof,
         }
 
-    def test_schema45_no_default_user_and_roles(self):
+    def test_schema46_no_default_user_and_roles(self):
         with server.db() as conn:
             version=conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
-            self.assertEqual(version,45)
+            self.assertEqual(version,46)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM finance_users").fetchone()[0],4)
+            self.assertTrue(conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_legacy_source_records'"
+            ).fetchone())
         self.assertFalse(finance_identity.can_write(self.viewer,"/api/expenses"))
         self.assertFalse(finance_identity.can_write(self.clerk,"/api/bank/allocate"))
         self.assertFalse(finance_identity.can_write(self.clerk,"/api/personal-advances/approve"))

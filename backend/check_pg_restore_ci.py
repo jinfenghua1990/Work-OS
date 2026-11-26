@@ -84,8 +84,8 @@ def main():
         dst.execute("SET TRANSACTION READ ONLY")
         original=snapshot(src)
         recovered=snapshot(dst)
-    if original["version"]!=45:
-        raise AssertionError("schema45 required before restore verification")
+    if original["version"]!=46:
+        raise AssertionError("schema46 required before restore verification")
     if original!=recovered:
         raise AssertionError("restored database differs from source data")
     if not original["counts"]["public.journal_entries"]:
