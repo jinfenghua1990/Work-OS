@@ -3,7 +3,7 @@
 Examples:
     python backend/manage_finance_users.py add --username finance01 --role finance_clerk
     python backend/manage_finance_users.py add --username reviewer01 --role finance_approver
-Requires WORKOS_AUTH_MODE=named and an initialized Schema 45 database.
+Requires WORKOS_AUTH_MODE=named and an initialized Schema 46 database.
 """
 from __future__ import annotations
 import argparse
