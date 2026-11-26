@@ -1029,6 +1029,23 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def current_schema_version() -> int | None:
+    """Cheapest possible schema probe: one aggregate over schema_migrations.
+
+    Used by health reporting and by deploy checks so operators can verify which
+    schema a running service is actually attached to, without reading logs.
+    """
+    table = "public.schema_migrations" if DB_BACKEND == "postgres" else "schema_migrations"
+    try:
+        with db() as conn:
+            row = conn.execute(f"SELECT COALESCE(MAX(version),0) FROM {table}").fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        # A missing or unreadable migration table is reported as "unknown"
+        # rather than crashing a health probe.
+        return None
+
+
 def journal(conn: sqlite3.Connection, source_type: str, source_id: str, posted_on: str, lines: list[tuple[str, Decimal, Decimal]], business_line: str = "unassigned", entity_code: str = "unassigned", project_code: str | None = None, currency: str = "CNY", line_dimensions: list[tuple[str, str, str | None]] | None = None) -> None:
     if sum((d for _, d, _ in lines), Decimal(0)) != sum((c for _, _, c in lines), Decimal(0)):
         raise ValueError("journal entry is not balanced")
@@ -1223,7 +1240,12 @@ class Api(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
-        self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:5175")
+        origin = self.headers.get("Origin") if self.headers else None
+        if origin and local_auth.origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1:8106")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key")
         self.send_header("Cache-Control","no-store")
@@ -1286,7 +1308,15 @@ class Api(BaseHTTPRequestHandler):
             return
         path = parsed.path
         if path == "/api/health":
-            return self.reply(200, {"status": "ok", "database_backend": DB_BACKEND, "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres"})
+            version = current_schema_version()
+            return self.reply(200, {
+                "status": "ok",
+                "database_backend": DB_BACKEND,
+                "database": str(DB_PATH) if DB_BACKEND == "sqlite" else "postgres",
+                "schema_version": version,
+                "required_schema_version": LATEST_SCHEMA_VERSION,
+                "schema_ready": version == LATEST_SCHEMA_VERSION,
+            })
         with db() as conn:
             if path == "/api/alsvid/finance/overview":
                 period=parse_qs(parsed.query).get("period",[date.today().strftime("%Y-%m")])[0]
@@ -3991,6 +4021,18 @@ class Api(BaseHTTPRequestHandler):
             return self.reply(201, {"period": period,"closed_at":closed_at, "status": "closed", "closed_by": actor,"journal_count":readiness["journal_count"],"reviewed_checks":sorted(required),"duplicate":False})
 
 
+CRITICAL_POSTGRES_TABLES = (
+    "purchases", "stock_layers", "sales_imports",
+    "bank_transactions", "invoices", "invoice_credit_notes", "tax_rate_rules",
+    "finance_users", "finance_personal_advance_reviews",
+    "finance_period_close_requests", "finance_action_reviews",
+    "journal_entries", "journal_lines", "personal_advances",
+    "archive_files", "archive_links", "sample_dispositions",
+    "evidence.original_documents", "evidence.row_snapshots",
+    "evidence.import_batches", "evidence.legacy_source_records",
+)
+
+
 def postgres_schema_status() -> dict:
     """Read-only schema preflight for cloud PostgreSQL/Neon.
 
@@ -3999,16 +4041,7 @@ def postgres_schema_status() -> dict:
     """
     if DB_BACKEND != "postgres":
         raise RuntimeError("schema preflight only supports WORKOS_DB_BACKEND=postgres")
-    critical = (
-        "purchases", "stock_layers", "sales_imports",
-        "bank_transactions", "invoices", "invoice_credit_notes", "tax_rate_rules",
-        "finance_users", "finance_personal_advance_reviews",
-        "finance_period_close_requests", "finance_action_reviews",
-        "journal_entries", "journal_lines", "personal_advances",
-        "archive_files", "archive_links", "sample_dispositions",
-        "evidence.original_documents", "evidence.row_snapshots",
-        "evidence.import_batches",
-    )
+    critical = CRITICAL_POSTGRES_TABLES
     with db() as conn:
         exists=conn.execute(
             "SELECT to_regclass('public.schema_migrations') AS table_name"
@@ -4047,6 +4080,16 @@ def require_database_ready() -> None:
             # Legacy SQLite upgrade branches land on 45 and return; run one
             # more idempotent pass so schema 46 is applied before serving.
             init_db()
+            with db() as conn:
+                current = int(conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0])
+        if current < LATEST_SCHEMA_VERSION:
+            # Never serve on a database older than the code: missing tables
+            # would only surface later as per-request failures.
+            raise RuntimeError(
+                f"SQLite schema is not ready: current v{current}, "
+                f"required v{LATEST_SCHEMA_VERSION} ({DB_PATH}). "
+                "Refusing to serve from a database this code cannot support."
+            )
         return
     status = postgres_schema_status()
     if not status["ready"]:
