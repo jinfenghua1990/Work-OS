@@ -67,14 +67,18 @@ launchctl kickstart -k "gui/$(id -u)/com.gino.workos-web"
 # 5. 等待就绪并打印访问地址
 echo "==> 等待服务就绪"
 READY=0
+HEALTH_BODY="$(mktemp -t workos-health)"
 for i in $(seq 1 20); do
-  if curl -fsS -o /dev/null http://127.0.0.1:8082/api/health 2>/dev/null; then
+  # 200 = 已就绪；401/403 = 服务已起来但本机启用了登录，同样算就绪
+  code="$(curl -sS -o "$HEALTH_BODY" -w '%{http_code}' http://127.0.0.1:8082/api/health 2>/dev/null || true)"
+  if [ "$code" = "200" ] || [ "$code" = "401" ] || [ "$code" = "403" ]; then
     READY=1
     break
   fi
   sleep 1
 done
 if [ "$READY" -ne 1 ]; then
+  rm -f "$HEALTH_BODY"
   echo "错误: 20 秒内服务未就绪。请查看日志："
   echo "  $LOG_DIR/web.err.log"
   echo "  $LOG_DIR/api.err.log"
@@ -82,6 +86,26 @@ if [ "$READY" -ne 1 ]; then
   launchctl list | grep com.gino.workos || true
   exit 1
 fi
+
+# 6. 校验运行时 schema 与代码要求的版本一致（避免"服务起来了但库是旧版"）
+if [ "$code" = "200" ]; then
+  if ! "$PYTHON_BIN" - "$HEALTH_BODY" <<'PY'
+import json, sys
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+current = payload.get("schema_version")
+required = payload.get("required_schema_version")
+print(f"    schema_version: {current} (required {required})")
+if current is None or required is None or current != required:
+    raise SystemExit(1)
+PY
+  then
+    rm -f "$HEALTH_BODY"
+    echo "错误: 运行中的账套 schema 与代码要求不一致，拒绝报告部署成功。"
+    echo "  参考 deploy/README.md，用最新 seed 重建账套，或运行 python backend/check_database.py"
+    exit 1
+  fi
+fi
+rm -f "$HEALTH_BODY"
 
 IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo '<本机IP>')"
 echo ""

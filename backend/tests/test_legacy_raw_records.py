@@ -2,11 +2,16 @@
 
 Run without Neon: python -m unittest backend.tests.test_legacy_raw_records -v
 """
+import http.client
+import json
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 import legacy_raw_records
@@ -81,6 +86,40 @@ class LegacyRawRecordTests(unittest.TestCase):
             self.assertIsNotNone(conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_legacy_source_records'"
             ).fetchone())
+
+    def test_refuses_to_serve_when_schema_stays_behind(self):
+        """A database the code cannot support must fail loudly, not serve."""
+        with server.db() as conn:
+            conn.execute("DROP TABLE evidence_legacy_source_records")
+            conn.execute("DELETE FROM schema_migrations WHERE version=46")
+        with patch.object(server, "init_db", lambda: None):
+            with self.assertRaisesRegex(RuntimeError, "SQLite schema is not ready"):
+                server.require_database_ready()
+
+    def test_postgres_preflight_requires_schema_46_table(self):
+        self.assertIn("evidence.legacy_source_records", server.CRITICAL_POSTGRES_TABLES)
+
+    def test_health_reports_schema_version_and_readiness(self):
+        self.assertEqual(server.current_schema_version(), 46)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Api)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/health")
+            response = conn.getresponse()
+            status = response.status
+            body = json.loads(response.read())
+            conn.close()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(2)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["schema_version"], 46)
+        self.assertEqual(body["required_schema_version"], 46)
+        self.assertTrue(body["schema_ready"])
 
 
 if __name__ == "__main__":

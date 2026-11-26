@@ -34,6 +34,7 @@ chmod +x deploy/setup.sh
 4. 把 `deploy/launchagents/*.plist` 的占位符替换为实际值（`__REPO__` 仓库路径、`__HOME__` 用户目录、`__NPM__`/`__PYTHON__` 运行时绝对路径），安装到 `~/Library/LaunchAgents/`
 5. `launchctl bootstrap` + `kickstart` 加载两个常驻服务
 6. 等待健康检查（最多 20 秒），**失败则打印日志位置并退出非 0**，不会假报"部署完成"
+7. **校验运行时 schema**：读取 `/api/health` 里的 `schema_version` 与 `required_schema_version`，两者不一致时同样退出非 0——避免"服务起来了但账套是旧版"这种假成功
 
 ## 访问
 
@@ -52,6 +53,10 @@ chmod +x deploy/setup.sh
 ## 运维
 
 ```bash
+# 核对运行中的账套 schema（未启用登录时）
+curl -s http://127.0.0.1:8082/api/health
+# {"status":"ok",...,"schema_version":46,"required_schema_version":46,"schema_ready":true}
+
 # 改完前端代码
 npm run build
 launchctl kickstart -k gui/$(id -u)/com.gino.workos-web
@@ -69,3 +74,5 @@ launchctl bootout gui/$(id -u)/com.gino.workos-api
 ## 安全提醒
 
 8082 对局域网开放且**无访问密码**。适合内网演示，不要暴露到公网，也不要把它当正式财务账套使用。生产切换走 `docs/PRODUCTION_ROLLOUT_V45.md` 的门禁。
+
+> 若本机启用了登录密码，`/api/health` 会返回 401，`deploy/setup.sh` 此时只判断"服务已起来"并跳过 schema 比对；这种情况下请改用 `python backend/check_database.py`（PostgreSQL）或直接查 SQLite 的 `schema_migrations` 最大值来核对版本。
