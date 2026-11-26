@@ -6,7 +6,7 @@
 
 1. 在项目根目录运行 `python backend/set_local_password.py`，输入两次管理密码（至少 12 字符，输入不回显）。
 2. 把脚本打印的 `WORKOS_AUTH_PASSWORD_HASH=scrypt$...` 完整写进根目录的 `.env`；**仅保存密码哈希，不存明文密码**。
-3. 运行 `python backend/run_offline.py`，另开终端运行 `npm run dev`。打开 `http://127.0.0.1:5175` 登录。
+3. 运行 `python backend/run_offline.py`，另开终端运行 `npm run dev`。打开 `http://127.0.0.1:8085` 登录。
 4. 8 小时会话过期需要重新登录；退出登录会作废服务端内存中的会话令牌，API 服务重启也会令所有会话失效。
 
 **重要边界：**
