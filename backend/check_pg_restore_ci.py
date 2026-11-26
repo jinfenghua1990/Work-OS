@@ -31,6 +31,7 @@ FIXED_TABLES=(
     "evidence.original_documents",
     "evidence.row_snapshots",
     "evidence.import_batches",
+    "evidence.legacy_source_records",
 )
 
 

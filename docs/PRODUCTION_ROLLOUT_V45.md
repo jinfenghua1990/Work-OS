@@ -1,6 +1,7 @@
 # Work OS · Schema 43 → 45 受控上线清单（2026-11-22）
 
 > 状态：**发布准备文件，不是上线完成证明**。编写时生产 Neon 仍为 Schema 43，main 未整合发布分支。
+> **Schema 46 附加项（2026-11-26）**：本文件仍是 43→45 的门禁；46 只新增 `evidence.legacy_source_records` 只读快照表与不可变触发器，不修改历史凭证。完成本文件全部 45 门禁后，再执行 `backend/migrations/46_legacy_raw_records.sql`（严格检查当前为 45），并确保备份恢复演练覆盖该表及其触发器；迁移后 `python backend/check_database.py` 必须显示 required/current 46 且 `ready=true`。不得把 schema 42 的旧 CoffeeBear 分支直接合入。
 > 发布对象：`jinfenghua1990/Work-OS`，代码整合 PR #28。
 > 适用范围：Work OS 财务中心；ALSVID Admin 保持其独立业务数据库，不进行跨库写入。
 
