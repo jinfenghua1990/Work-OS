@@ -17,6 +17,7 @@ from urllib.parse import unquote
 
 import original_archive
 import evidence_db
+import legacy_raw_records
 import r2_evidence
 import evidence_audit
 import monthly_flow
@@ -65,7 +66,7 @@ if DB_BACKEND not in {"sqlite", "postgres"}:
 DATABASE_URL = os.environ.get("WORKOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 DB_PATH = Path(os.environ.get("WORKOS_DB_PATH", ROOT / "data" / "workos.sqlite3"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-LATEST_SCHEMA_VERSION = 45
+LATEST_SCHEMA_VERSION = 46
 try:
     import psycopg as _psycopg
 except ImportError:
@@ -315,6 +316,13 @@ def init_db() -> None:
                 version = conn.execute("SELECT MAX(version) AS version FROM schema_migrations").fetchone()["version"]
                 if version is not None and int(version) >= LATEST_SCHEMA_VERSION:
                     ensure_postgres_triggers(conn)
+                    return
+                if version is not None and int(version)==45:
+                    conn.execute("BEGIN")
+                    legacy_raw_records.ensure_tables(conn)
+                    conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(46,?)",(now(),))
+                    ensure_postgres_triggers(conn)
+                    conn.commit()
                     return
                 if version is not None and int(version)==44:
                     conn.execute("BEGIN")
@@ -1010,6 +1018,8 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(44,?)", (now(),))
         finance_identity.ensure_tables(conn)
         conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(45,?)", (now(),))
+        legacy_raw_records.ensure_tables(conn)
+        conn.execute("INSERT OR IGNORE INTO schema_migrations VALUES(46,?)", (now(),))
         if getattr(conn, "is_postgres", False):
             ensure_postgres_triggers(conn)
             conn.commit()
@@ -1288,6 +1298,12 @@ class Api(BaseHTTPRequestHandler):
                 return self.reply(200,stock_cover(conn))
             if path == "/api/archive/audit":
                 return self.reply(200,evidence_audit.audit_evidence(conn))
+            if path == "/api/archive/legacy-summary":
+                return self.reply(200,{
+                    "source_system":"coffeebear-prod",
+                    "tables":legacy_raw_records.counts(conn),
+                    "note":"只读的旧系统数据库行快照；文件原件必须另外核验字节和 SHA-256。"
+                })
             if path == "/api/bank/match-suggestions":
                 return self.reply(200,bank_matching.from_database(conn))
             if path == "/api/bank/reconciliation-summary":
